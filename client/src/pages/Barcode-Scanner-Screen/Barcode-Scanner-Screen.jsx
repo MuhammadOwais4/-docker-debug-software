@@ -18,7 +18,7 @@ const TEMPLATE_HEADERS = [
 ]
 
 // ── Base URL — same as what handleImport uses ────────────────────────────────
-const BASE_URL = "https://debug-nxby.vercel.app/api"
+const BASE_URL = "https://owaisbackend.duckdns.org/api"
 
 // ── Auth token helper ────────────────────────────────────────────────────────
 const getToken = () => (typeof localStorage !== "undefined" ? localStorage.getItem("authToken") : null)
