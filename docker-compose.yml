@@ -8,20 +8,9 @@ services:
     env_file:
       - ./server/.env
     environment:
-      - CLIENT_ORIGIN=http://localhost
-    expose:
-      - "5000"
-    networks:
-      - app-network
-
-  frontend:
-    build: ./client
-    container_name: debug-frontend
-    restart: unless-stopped
+      - CLIENT_ORIGIN=https://naya-naam.vercel.app
     ports:
-      - "80:80"
-    depends_on:
-      - backend
+      - "5000:5000"
     networks:
       - app-network
 
