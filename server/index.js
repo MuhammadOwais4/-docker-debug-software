@@ -10,8 +10,7 @@ app.use(
   cors({
     // Same-origin via nginx proxy in production, plus local Vite dev server.
     origin: [
-      "http://localhost:5173",
-      "http://localhost",
+      "https://docker-debug-software.vercel.app",
       process.env.CLIENT_ORIGIN,
     ].filter(Boolean),
     credentials: true,
