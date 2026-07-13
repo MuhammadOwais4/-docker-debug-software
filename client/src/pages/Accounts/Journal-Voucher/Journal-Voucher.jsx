@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -19,10 +19,8 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Trash2, Edit3, Plus, Save, X, Check } from "lucide-react"
 import ApiHandler from "@/Api/apihandle"
-// import { useNavigate } from "react-router-dom" // REMOVED as per updates
 
 export default function JournalVoucher() {
-  // const navigate = useNavigate() // REMOVED as per updates
   const [voucherNo, setVoucherNo] = useState("")
   const [voucherDate, setVoucherDate] = useState("")
   const [narration, setNarration] = useState("")
@@ -40,7 +38,7 @@ export default function JournalVoucher() {
     creditAccount: "",
     amount: "",
     step: "debit",
-    narration: "", // inline narration typed once, mirrored on DR/CR
+    narration: "",
   })
   const [showInlineEntry, setShowInlineEntry] = useState(false)
   const [accountOptions, setAccountOptions] = useState([])
@@ -55,13 +53,15 @@ export default function JournalVoucher() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [voucherToDelete, setVoucherToDelete] = useState(null)
   const [deleting, setDeleting] = useState(false)
-  // ADDED state to control on-screen print preview before opening system print
   const [showPrintPreview, setShowPrintPreview] = useState(false)
 
-  // ADDED print handler function
+  // NEW: refs for auto-focus / tab-like Enter navigation
+  const debitTriggerRef = useRef(null)
+  const amountInputRef = useRef(null)
+  const creditTriggerRef = useRef(null)
+
   const handlePrint = () => {
     setShowPrintPreview(true)
-    // wait for the DOM to paint with the print view visible
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         window.print()
@@ -69,12 +69,19 @@ export default function JournalVoucher() {
     })
   }
 
-  // ADDED reset preview after user closes the print dialog (fallback included)
   useEffect(() => {
     const onAfterPrint = () => setShowPrintPreview(false)
     window.addEventListener("afterprint", onAfterPrint)
     return () => window.removeEventListener("afterprint", onAfterPrint)
   }, [])
+
+  // NEW: whenever step changes (mouse click OR keyboard), focus the right field
+  useEffect(() => {
+    if (!showInlineEntry) return
+    if (inlineEntry.step === "debit") debitTriggerRef.current?.focus()
+    if (inlineEntry.step === "amount") amountInputRef.current?.focus()
+    if (inlineEntry.step === "credit") creditTriggerRef.current?.focus()
+  }, [inlineEntry.step, showInlineEntry])
 
   useEffect(() => {
     const generateUniqueVoucherNo = () => {
@@ -96,7 +103,6 @@ export default function JournalVoucher() {
   const loadAllAccounts = async () => {
     try {
       setLoading(true)
-
       const [assetsRes, equityRes, expensesRes, liabilitiesRes, revenueRes] = await Promise.all([
         ApiHandler.getAssets().catch(() => ({ data: [] })),
         ApiHandler.getEquity().catch(() => ({ data: [] })),
@@ -195,7 +201,7 @@ export default function JournalVoucher() {
     setSerialCounter(1)
     setEditingId(null)
     setEditingEntry({ account: "", amount: "", entryType: "debit", description: "" })
-    setInlineEntry({ debitAccount: "", creditAccount: "", amount: "", step: "debit", narration: "" }) // Reset inline entry narration
+    setInlineEntry({ debitAccount: "", creditAccount: "", amount: "", step: "debit", narration: "" })
   }
 
   const generateUniqueVoucherNo = () => {
@@ -218,16 +224,13 @@ export default function JournalVoucher() {
 
   const handleDeleteVoucher = async () => {
     if (!voucherToDelete) return
-
     try {
       setDeleting(true)
       await ApiHandler.deleteVoucher(voucherToDelete._id)
       await loadAllVouchers()
-
       if (editingVoucherId === voucherToDelete._id) {
         cancelEditMode()
       }
-
       setDeleteDialogOpen(false)
       setVoucherToDelete(null)
     } catch (error) {
@@ -259,7 +262,7 @@ export default function JournalVoucher() {
         voucherNo: voucherNo,
         voucherType: "JV",
         voucherDate: new Date(voucherDate),
-        narration: derivedNarration, // use derived narration
+        narration: derivedNarration,
         entries,
       }
 
@@ -299,8 +302,8 @@ export default function JournalVoucher() {
       setTimeout(() => setSaveSuccess(false), 3000)
 
       setEntries([])
-      setNarration("") // Clear top-level narration after save
-      setInlineEntry({ debitAccount: "", creditAccount: "", amount: "", step: "debit", narration: "" }) // Clear inline entry
+      setNarration("")
+      setInlineEntry({ debitAccount: "", creditAccount: "", amount: "", step: "debit", narration: "" })
       setSerialCounter(1)
       setIsEditMode(false)
       setEditingVoucherId(null)
@@ -331,12 +334,15 @@ export default function JournalVoucher() {
     }
   }
 
-  const handleInlineEntrySubmit = () => {
-    if (!inlineEntry.debitAccount || !inlineEntry.creditAccount || !inlineEntry.amount) return
+  // FIXED: accepts override data so it works even when called
+  // right inside onValueChange (before state re-render happens)
+  const handleInlineEntrySubmit = (overrideData) => {
+    const current = overrideData || inlineEntry
+    if (!current.debitAccount || !current.creditAccount || !current.amount) return
 
-    const amount = Number.parseFloat(inlineEntry.amount) || 0
+    const amount = Number.parseFloat(current.amount) || 0
     const currentSerial = serialCounter
-    const description = (inlineEntry.narration || narration || "").trim() //
+    const description = (current.narration || narration || "").trim()
 
     const timestamp = Date.now()
     const randomDebit = Math.floor(Math.random() * 1000000)
@@ -345,41 +351,38 @@ export default function JournalVoucher() {
     const debitEntry = {
       id: `debit-${timestamp}-${randomDebit}`,
       serialNo: currentSerial,
-      account: inlineEntry.debitAccount,
+      account: current.debitAccount,
       debitAmount: amount,
       creditAmount: 0,
       entryType: "debit",
-      description: description, //
+      description,
       pairId: currentSerial,
     }
 
     const creditEntry = {
       id: `credit-${timestamp}-${randomCredit}`,
       serialNo: currentSerial,
-      account: inlineEntry.creditAccount,
+      account: current.creditAccount,
       debitAmount: 0,
       creditAmount: amount,
       entryType: "credit",
-      description: description, //
+      description,
       pairId: currentSerial,
     }
 
     if (description) setNarration(description)
 
-    setEntries([...entries, debitEntry, creditEntry])
-    setInlineEntry({ debitAccount: "", creditAccount: "", amount: "", step: "debit", narration: "" }) //
-    setSerialCounter(serialCounter + 1)
+    setEntries((prev) => [...prev, debitEntry, creditEntry])
+    setInlineEntry({ debitAccount: "", creditAccount: "", amount: "", step: "debit", narration: "" })
+    setSerialCounter((prev) => prev + 1)
     setShowInlineEntry(false)
   }
 
   const handleKeyPress = (e, action) => {
     if (e.key === "Enter") {
-      if (action === "debit" && inlineEntry.debitAccount) {
-        setInlineEntry({ ...inlineEntry, step: "amount" })
-      } else if (action === "amount" && inlineEntry.amount) {
+      if (action === "amount" && inlineEntry.amount) {
+        e.preventDefault()
         setInlineEntry({ ...inlineEntry, step: "credit" })
-      } else if (action === "credit" && inlineEntry.creditAccount) {
-        handleInlineEntrySubmit()
       }
     }
   }
@@ -426,7 +429,7 @@ export default function JournalVoucher() {
   }
 
   const cancelInlineEntry = () => {
-    setInlineEntry({ debitAccount: "", creditAccount: "", amount: "", step: "debit", narration: "" }) //
+    setInlineEntry({ debitAccount: "", creditAccount: "", amount: "", step: "debit", narration: "" })
     setShowInlineEntry(false)
   }
 
@@ -458,10 +461,8 @@ export default function JournalVoucher() {
   }, {})
 
   return (
-    // WRAPPED ROOT CONTAINER WITH A TOGGLING CLASS TO CONTROL SCREEN PREVIEW OF THE VOUCHER AREA
     <div className={showPrintPreview ? "print-preview" : ""}>
       <div className="min-h-screen bg-gradient-to-br from-gray-50 via-slate-50 to-zinc-50 p-4">
-        {/* WRAPPED INTERACTIVE UI IN no-print SO IT DOESN'T APPEAR ON PAPER */}
         <div className="no-print">
           <Card className="w-full max-w-6xl mx-auto shadow-2xl border-0 overflow-hidden">
             <CardHeader className="text-center border-b-0 bg-gradient-to-r from-blue-300 via-blue-300 to-blue-300 text-black py-8">
@@ -495,7 +496,6 @@ export default function JournalVoucher() {
             </CardHeader>
 
             <CardContent className="p-8 bg-white">
-              {/* ADDED Print button next to Save */}
               <div className="mb-4 flex justify-end">
                 <div className="flex items-center gap-3">
                   {saveSuccess && (
@@ -641,7 +641,6 @@ export default function JournalVoucher() {
               <div className="border-2 border-gray-200 rounded-xl overflow-hidden shadow-lg">
                 <div className="bg-gradient-to-r from-blue-300 to-blue-300 p-4 text-black flex items-center justify-between">
                   <h3 className="text-xl font-bold tracking-wide">Chart of Accounts - General Ledger</h3>
-                  {/* REMOVED SAVE BUTTON from here and placed it in the print section */}
                 </div>
 
                 <div className="overflow-x-auto">
@@ -672,12 +671,15 @@ export default function JournalVoucher() {
                             </td>
                             <td className="px-6 py-4 border-r border-gray-300">
                               <div className="space-y-3">
+                                {/* DEBIT SELECT: onValueChange auto-advances step to "amount" — works for mouse click AND keyboard selection */}
                                 <Select
                                   value={inlineEntry.debitAccount}
-                                  onValueChange={(value) => setInlineEntry({ ...inlineEntry, debitAccount: value })}
+                                  onValueChange={(value) =>
+                                    setInlineEntry({ ...inlineEntry, debitAccount: value, step: "amount" })
+                                  }
                                 >
                                   <SelectTrigger
-                                    onKeyDown={(e) => handleKeyPress(e, "debit")}
+                                    ref={debitTriggerRef}
                                     className="border-2 border-gray-400 focus:border-black text-base"
                                   >
                                     <SelectValue placeholder="Select debit account" />
@@ -718,6 +720,7 @@ export default function JournalVoucher() {
                             <td className="px-6 py-4 text-center border-r border-gray-300">
                               {inlineEntry.step === "amount" || inlineEntry.step === "credit" ? (
                                 <Input
+                                  ref={amountInputRef}
                                   type="number"
                                   step="0.01"
                                   value={inlineEntry.amount}
@@ -725,7 +728,6 @@ export default function JournalVoucher() {
                                   onKeyDown={(e) => handleKeyPress(e, "amount")}
                                   className="w-full text-center text-lg font-bold border-2 border-gray-400 focus:border-black"
                                   placeholder="0.00"
-                                  autoFocus={inlineEntry.step === "amount"}
                                 />
                               ) : (
                                 <span className="text-gray-400 text-lg">-</span>
@@ -752,13 +754,20 @@ export default function JournalVoucher() {
                             </td>
                             <td className="px-6 py-4 border-r border-gray-300">
                               <div className="space-y-3">
+                                {/* CREDIT SELECT: onValueChange sets account AND auto-submits the whole entry if amount already filled — mouse click or keyboard, both save instantly */}
                                 <Select
                                   value={inlineEntry.creditAccount}
-                                  onValueChange={(value) => setInlineEntry({ ...inlineEntry, creditAccount: value })}
+                                  onValueChange={(value) => {
+                                    const updated = { ...inlineEntry, creditAccount: value }
+                                    setInlineEntry(updated)
+                                    if (updated.amount) {
+                                      handleInlineEntrySubmit(updated)
+                                    }
+                                  }}
                                   disabled={inlineEntry.step !== "credit"}
                                 >
                                   <SelectTrigger
-                                    onKeyDown={(e) => handleKeyPress(e, "credit")}
+                                    ref={creditTriggerRef}
                                     className="border-2 border-gray-400 focus:border-black text-base disabled:opacity-50"
                                   >
                                     <SelectValue placeholder="Select credit account" />
@@ -813,7 +822,7 @@ export default function JournalVoucher() {
                                 <Button
                                   size="sm"
                                   variant="outline"
-                                  onClick={handleInlineEntrySubmit}
+                                  onClick={() => handleInlineEntrySubmit()}
                                   className="border-green-600 text-green-600 hover:bg-green-50 hover:border-green-700 bg-transparent"
                                   title="Add Double Entry (Debit & Credit)"
                                 >
@@ -1027,7 +1036,6 @@ export default function JournalVoucher() {
           </Card>
         </div>
 
-        {/* PRINT-ONLY AREA WITH FORMATTED PRINTOUT, INCLUDING 'CREATED BY SOFT-TECHNIX' FOOTER */}
         <div className="print-area px-10 py-12">
           <div className="max-w-4xl mx-auto">
             <header className="text-center mb-6">
@@ -1118,7 +1126,6 @@ export default function JournalVoucher() {
           <div className="print-footer text-xs text-gray-700 mt-8">Created by Soft-Technix</div>
         </div>
 
-        {/* PRINT STYLES: HIDE INTERACTIVE UI, SHOW PRINT LAYOUT, AND ENSURE COLORS RENDER */}
         <style jsx>{`
           .print-area {
             display: none;
@@ -1145,24 +1152,17 @@ export default function JournalVoucher() {
         `}</style>
       </div>
 
-      {/* ADDED GLOBAL OVERRIDES:
-      - show print-area on screen when in .print-preview
-      - during print: hide everything except .print-area
-      - remove pictures entirely (logos/images) in preview and print */}
       <style jsx global>{`
         @media screen {
-          /* Hide print layout by default on screen */
           .print-area {
             display: none;
           }
-          /* In preview mode, hide interactive UI and show the voucher block */
           .print-preview .no-print {
             display: none !important;
           }
           .print-preview .print-area {
             display: block !important;
           }
-          /* Remove any images while previewing */
           .print-preview img,
           .print-area img {
             display: none !important;
@@ -1170,7 +1170,6 @@ export default function JournalVoucher() {
         }
 
         @media print {
-          /* Ensure only the voucher prints */
           body * {
             visibility: hidden !important;
           }
@@ -1184,11 +1183,9 @@ export default function JournalVoucher() {
             top: 0;
             width: 100%;
           }
-          /* Remove all pictures/logos from print */
           img {
             display: none !important;
           }
-          /* Preserve colors when printing */
           body {
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;
