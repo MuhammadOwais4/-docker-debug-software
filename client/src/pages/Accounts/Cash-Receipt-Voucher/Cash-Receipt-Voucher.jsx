@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -20,7 +20,7 @@ import {
 import { Trash2, Edit3, Plus, Save, X, Check, Printer } from "lucide-react"
 import ApiHandler from "@/Api/apihandle"
 
-export default function CashPaymentVoucher() {
+export default function CashReceiptVoucher() {
   const [voucherNo, setVoucherNo] = useState("")
   const [voucherDate, setVoucherDate] = useState("")
   const [entries, setEntries] = useState([])
@@ -37,7 +37,7 @@ export default function CashPaymentVoucher() {
     creditAccount: "",
     amount: "",
     step: "debit",
-    narration: "", // mirrored narration for both debit and credit rows
+    narration: "",
   })
   const [showInlineEntry, setShowInlineEntry] = useState(false)
   const [accountOptions, setAccountOptions] = useState([])
@@ -53,6 +53,12 @@ export default function CashPaymentVoucher() {
   const [voucherToDelete, setVoucherToDelete] = useState(null)
   const [deleting, setDeleting] = useState(false)
   const [readyToPrint, setReadyToPrint] = useState(false)
+
+  // refs used to auto-focus the next field in the entry flow (debit -> narration -> amount -> credit)
+  const debitTriggerRef = useRef(null)
+  const narrationRef = useRef(null)
+  const amountRef = useRef(null)
+  const creditTriggerRef = useRef(null)
 
   useEffect(() => {
     const generateUniqueVoucherNo = () => {
@@ -71,6 +77,42 @@ export default function CashPaymentVoucher() {
     loadAllVouchers()
   }, [])
 
+  // Auto-focus the field for the current step, so the whole entry can be filled with keyboard only
+  useEffect(() => {
+    if (!showInlineEntry) return
+
+    if (inlineEntry.step === "debit" && debitTriggerRef.current) {
+      debitTriggerRef.current.focus()
+    } else if (inlineEntry.step === "narration" && narrationRef.current) {
+      narrationRef.current.focus()
+    } else if (inlineEntry.step === "amount" && amountRef.current) {
+      amountRef.current.focus()
+    } else if (inlineEntry.step === "credit" && creditTriggerRef.current) {
+      creditTriggerRef.current.focus()
+    }
+  }, [inlineEntry.step, showInlineEntry])
+
+  // Ctrl+Enter (or Cmd+Enter on Mac) saves the voucher from anywhere on the page
+  useEffect(() => {
+    const handleGlobalSaveShortcut = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault()
+        if (!saving && entries.length > 0) {
+          saveVoucher()
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleGlobalSaveShortcut)
+    return () => window.removeEventListener("keydown", handleGlobalSaveShortcut)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saving, entries, isEditMode, editingVoucherId, voucherNo, voucherDate])
+
+  const cashAccounts = accountOptions.filter(
+  (account) => account.type === "CASH  ACCOUNT"
+)
+
+
   const loadAllAccounts = async () => {
     try {
       setLoading(true)
@@ -83,9 +125,7 @@ export default function CashPaymentVoucher() {
       ])
 
       const allAccounts = [
-        ...(assetsRes.data || [])
-  .filter((account) => account.type === "CASH ACCOUNT")
-  .map((account) => ({
+        ...(assetsRes.data || []).map((account) => ({
           value: `${account.code} - ${account.name}`,
           label: `${account.code} - ${account.name} (Asset)`,
           category: "Assets",
@@ -139,18 +179,14 @@ export default function CashPaymentVoucher() {
       setLoadingVouchers(false)
     }
   }
-const CashAccounts = accountOptions.filter(
-  (account) => account.type === "CASH ACCOUNT"
-)
+
   const loadVoucherForEdit = (voucher) => {
     setIsEditMode(true)
     setEditingVoucherId(voucher._id)
     setVoucherNo(voucher.voucherNo)
     setVoucherDate(new Date(voucher.voucherDate).toISOString().split("T")[0])
 
-    // CRITICAL FIX: Ensure each entry has a unique 'id' property
     const entriesWithIds = (voucher.entries || []).map((entry, index) => {
-      // If entry already has an id, use it; otherwise create a unique one
       if (!entry.id) {
         return {
           ...entry,
@@ -227,7 +263,6 @@ const CashAccounts = accountOptions.filter(
     try {
       setSaving(true)
 
-      // Use the last non-empty description (entries mirror inline narration into both DR/CR lines)
       const derivedNarration =
         [...entries]
           .reverse()
@@ -235,7 +270,6 @@ const CashAccounts = accountOptions.filter(
           ?.description?.trim() || ""
 
       if (!derivedNarration) {
-        // No narration found on any entry; block save to satisfy backend validation
         alert("Please add narration in the entry before saving.")
         setSaving(false)
         return
@@ -309,9 +343,8 @@ const CashAccounts = accountOptions.filter(
 
     const amount = Number.parseFloat(inlineEntry.amount) || 0
     const currentSerial = serialCounter
-    const description = inlineEntry.narration // previously used voucher-level narration
+    const description = inlineEntry.narration
 
-    // Generate TRULY unique IDs using timestamp and random number
     const timestamp = Date.now()
     const randomDebit = Math.floor(Math.random() * 1000000)
     const randomCredit = Math.floor(Math.random() * 1000000)
@@ -339,52 +372,33 @@ const CashAccounts = accountOptions.filter(
     }
 
     setEntries([...entries, debitEntry, creditEntry])
-    setInlineEntry({ debitAccount: "", creditAccount: "", amount: "", step: "debit", narration: "" }) // reset narration too
+    setInlineEntry({ debitAccount: "", creditAccount: "", amount: "", step: "debit", narration: "" })
     setSerialCounter(serialCounter + 1)
     setShowInlineEntry(false)
   }
 
   const handleKeyPress = (e, action) => {
     if (e.key === "Enter") {
-      // allow Shift+Enter to insert a newline in narration fields
       if (action === "narration" && !e.shiftKey) {
         e.preventDefault()
       }
       if (action === "debit" && inlineEntry.debitAccount) {
-        setInlineEntry({ ...inlineEntry, step: "narration" }) // go to narration next
+        e.preventDefault()
+        setInlineEntry({ ...inlineEntry, step: "narration" })
       } else if (action === "narration" && inlineEntry.narration?.trim()) {
-        setInlineEntry({ ...inlineEntry, step: "amount" }) // proceed to amount after narration
+        setInlineEntry({ ...inlineEntry, step: "amount" })
       } else if (action === "amount" && inlineEntry.amount) {
+        e.preventDefault()
         setInlineEntry({ ...inlineEntry, step: "credit" })
       } else if (action === "credit" && inlineEntry.creditAccount) {
+        e.preventDefault()
         handleInlineEntrySubmit()
       }
     }
   }
 
-  // DELETE FUNCTION - Only deletes the specific entry by its unique ID
   const deleteEntry = (entryIdToDelete) => {
-    console.log("=== DELETE ENTRY DEBUG ===")
-    console.log("Entry ID to delete:", entryIdToDelete)
-    console.log(
-      "Current entries before delete:",
-      entries.map((e) => ({ id: e.id, account: e.account, type: e.entryType })),
-    )
-
-    // Filter out ONLY the entry that matches this exact ID
-    const updatedEntries = entries.filter((entry) => {
-      const shouldKeep = entry.id !== entryIdToDelete
-      console.log(`Entry ${entry.id} (${entry.entryType}): ${shouldKeep ? "KEEPING" : "DELETING"}`)
-      return shouldKeep
-    })
-
-    console.log("Entries remaining:", updatedEntries.length)
-    console.log(
-      "Remaining entries:",
-      updatedEntries.map((e) => ({ id: e.id, account: e.account, type: e.entryType })),
-    )
-    console.log("=========================")
-
+    const updatedEntries = entries.filter((entry) => entry.id !== entryIdToDelete)
     setEntries(updatedEntries)
   }
 
@@ -467,8 +481,7 @@ const CashAccounts = accountOptions.filter(
     window.addEventListener("afterprint", after)
 
     const start = async () => {
-      // Ensure DOM updates (print-mode CSS, layout) are applied before printing
-      await new Promise((r) => requestAnimationFrame(r ))
+      await new Promise((r) => requestAnimationFrame(r))
       await new Promise((r) => requestAnimationFrame(r))
       window.scrollTo(0, 0)
       window.print()
@@ -483,9 +496,9 @@ const CashAccounts = accountOptions.filter(
   return (
     <div
       id="voucher-root"
-      className="min-h-screen bg-gradient-to-br from-gray-50 via-slate-50 to-zinc-50 p-4 print:bg-white print:p-4 print:min-h-0 print:text-sm print:leading-tight print:pb-12"
+      className="min-h-screen bg-gradient-to-br from-gray-50 via-slate-50 to-zinc-50 p-4 print:bg-white print:p-0 print:min-h-0"
     >
-<style jsx global>{`
+      <style jsx global>{`
         @media print {
           @page {
             size: A4;
@@ -674,22 +687,14 @@ const CashAccounts = accountOptions.filter(
         }
       `}</style>
 
-      <Card className="w-full max-w-6xl mx-auto shadow-2xl border-0 overflow-hidden">
-        <CardHeader className="text-center border-b-0 bg-gradient-to-r from-blue-300 via-blue-300 to-blue-300 text-black py-8 print:py-2">
-          <div className="flex items-center justify-between mb-4">
-            {/* <Button
-              variant="outline"
-              onClick={() => navigate("/")}
-              className="bg-white/20 border-white/30 text-black hover:bg-white/30"
-            >
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Dashboard
-            </Button> */}
-            <div className="flex gap-2 print:hidden">
+      <Card className="w-full max-w-6xl mx-auto shadow-2xl border-0 overflow-hidden print:shadow-none print:border-0 print:max-w-full">
+        <CardHeader className="text-center border-b-0 bg-gradient-to-r from-blue-300 via-blue-300 to-blue-300 text-black py-8 print:py-3 print:mb-3 print-header">
+          <div className="flex items-center justify-between mb-4 print:hidden">
+            <div className="flex gap-2">
               <Button
                 variant="outline"
                 onClick={handlePrint}
-                className="bg-white/20 border-white/30 text-black hover:bg-white/30 print:hidden"
+                className="bg-white/20 border-white/30 text-black hover:bg-white/30"
                 aria-label="Print voucher"
                 title="Print voucher"
               >
@@ -716,14 +721,16 @@ const CashAccounts = accountOptions.filter(
               )}
             </div>
           </div>
-          <div className="text-lg font-semibold mb-3 opacity-90">demo</div>
-          <CardTitle className="text-3xl font-bold tracking-wide">
-            Cash Receipt Voucher - CRV {isEditMode && <span className="text-sm">(Editing)</span>}
+          <div className="text-lg font-semibold mb-3 opacity-90 print:text-base print:mb-1 print:opacity-100">
+            demo
+          </div>
+          <CardTitle className="text-3xl font-bold tracking-wide print:text-xl print:mb-1">
+            Cash Receipt Voucher - CRV {isEditMode && <span className="text-sm print:hidden">(Editing)</span>}
           </CardTitle>
-          <div className="w-24 h-1 bg-white/30 mx-auto mt-4 rounded-full"></div>
+          <div className="w-24 h-1 bg-white/30 mx-auto mt-4 rounded-full print:mt-1 print:h-0.5 print:w-16"></div>
         </CardHeader>
 
-        <CardContent className="p-8 bg-white">
+        <CardContent className="p-8 bg-white print:p-3 print-content">
           {showVoucherList && (
             <div className="mb-8 border-2 border-gray-300 rounded-lg p-4 bg-gray-50 print:hidden">
               <div className="flex justify-between items-center mb-4">
@@ -781,23 +788,29 @@ const CashAccounts = accountOptions.filter(
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-            <div className="space-y-3">
-              <Label htmlFor="voucher-no" className="text-lg font-semibold text-blue-300 flex items-center gap-2">
-                <div className="w-2 h-2 bg-blue-300 rounded-full"></div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 print:gap-3 print:mb-4">
+            <div className="space-y-3 print:space-y-1">
+              <Label
+                htmlFor="voucher-no"
+                className="text-lg font-semibold text-blue-300 flex items-center gap-2 print:text-xs print:text-black"
+              >
+                <div className="w-2 h-2 bg-blue-300 rounded-full print:hidden"></div>
                 CRV No.
               </Label>
               <Input
                 id="voucher-no"
                 value={voucherNo}
                 onChange={(e) => setVoucherNo(e.target.value)}
-                className="font-mono text-lg border-2 border-gray-300 focus:border-blue-300 transition-colors"
+                className="font-mono text-lg border-2 border-gray-300 focus:border-blue-300 transition-colors print:text-xs print:border print:py-1 print:h-auto"
                 disabled={isEditMode}
               />
             </div>
-            <div className="space-y-3">
-              <Label htmlFor="voucher-date" className="text-lg font-semibold text-blue-300 flex items-center gap-2">
-                <div className="w-2 h-2 bg-blue-300 rounded-full"></div>
+            <div className="space-y-3 print:space-y-1">
+              <Label
+                htmlFor="voucher-date"
+                className="text-lg font-semibold text-blue-300 flex items-center gap-2 print:text-xs print:text-black"
+              >
+                <div className="w-2 h-2 bg-blue-300 rounded-full print:hidden"></div>
                 Date
               </Label>
               <Input
@@ -805,9 +818,9 @@ const CashAccounts = accountOptions.filter(
                 type="date"
                 value={voucherDate}
                 onChange={(e) => setVoucherDate(e.target.value)}
-                className="text-lg border-2 border-gray-300 focus:border-black transition-colors"
+                className="text-lg border-2 border-gray-300 focus:border-black transition-colors print:text-xs print:border print:py-1 print:h-auto"
               />
-              <div className="text-sm text-gray-800 font-medium bg-gray-100 px-3 py-1 rounded-full inline-block">
+              <div className="text-sm text-gray-800 font-medium bg-gray-100 px-3 py-1 rounded-full inline-block print:text-xs print:px-2 print:bg-transparent">
                 Display: {formatDate(voucherDate)}
               </div>
             </div>
@@ -820,9 +833,9 @@ const CashAccounts = accountOptions.filter(
             <div className="text-sm text-gray-600">Total Accounts Available: {accountOptions.length}</div>
           </div>
 
-          <div className="border-2 border-gray-200 rounded-xl overflow-hidden shadow-lg">
-            <div className="bg-gradient-to-r from-blue-300 to-blue-300 p-4 text-black flex justify-between items-center">
-              <h3 className="text-xl font-bold tracking-wide">Chart of Accounts - General Ledger</h3>
+          <div className="border-2 border-gray-200 rounded-xl overflow-hidden shadow-lg print:border print:rounded-none print:shadow-none">
+            <div className="bg-gradient-to-r from-blue-300 to-blue-300 p-4 text-black flex justify-between items-center print:p-2 print:bg-blue-300">
+              <h3 className="text-xl font-bold tracking-wide print:text-xs">Chart of Accounts - General Ledger</h3>
               <div className="flex items-center gap-3 print:hidden">
                 {saveSuccess && (
                   <div className="flex items-center gap-2 bg-green-500 text-white px-3 py-1 rounded-full text-sm">
@@ -834,6 +847,7 @@ const CashAccounts = accountOptions.filter(
                   onClick={saveVoucher}
                   disabled={saving || entries.length === 0}
                   className="bg-white/20 border-white/30 text-black hover:bg-white/30"
+                  title="Ctrl+Enter to save from anywhere"
                 >
                   {saving ? "Saving..." : isEditMode ? "Update Voucher" : "Save Voucher"}
                 </Button>
@@ -841,26 +855,25 @@ const CashAccounts = accountOptions.filter(
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full print:text-xs print:[&_th]:py-2 print:[&_td]:py-2 print:[&_th]:px-2 print:[&_td]:px-2 print:[&_th]:text-xs print:[&_td]:align-top">
-                <thead className="bg-gradient-to-r from-gray-100 to-gray-200">
+              <table className="w-full">
+                <thead className="bg-gradient-to-r from-gray-100 to-gray-200 print:bg-gray-200">
                   <tr>
-                    <th className="px-3 py-4 text-center border-r border-gray-300 w-20 font-bold text-gray-700">
+                    <th className="px-3 py-4 text-center border-r border-gray-300 w-20 font-bold text-gray-700 print:px-2 print:py-2 print:text-xs print:w-12">
                       S.No.
                     </th>
-                    <th className="px-6 py-4 text-left border-r border-gray-300 font-bold text-gray-700">
+                    <th className="px-6 py-4 text-left border-r border-gray-300 font-bold text-gray-700 print:px-2 print:py-2 print:text-xs">
                       Account & Description
                     </th>
-                    <th className="px-6 py-4 text-center border-r border-gray-300 w-36 font-bold text-black">
+                    <th className="px-6 py-4 text-center border-r border-gray-300 w-36 font-bold text-black print:px-2 print:py-2 print:text-xs print:w-24">
                       DR. Amount
                     </th>
-                    <th className="px-6 py-4 text-center border-r border-gray-300 w-36 font-bold text-black">
+                    <th className="px-6 py-4 text-center border-r border-gray-300 w-36 font-bold text-black print:px-2 print:py-2 print:text-xs print:w-24">
                       CR. Amount
                     </th>
                     <th className="px-6 py-4 text-center w-28 font-bold text-gray-700 print:hidden">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {/* add narration textarea under the DEBIT row; bound to inlineEntry.narration */}
                   {showInlineEntry && (
                     <>
                       <tr className="border-t-2 bg-gradient-to-r from-gray-50 to-gray-100 border-gray-300">
@@ -874,6 +887,7 @@ const CashAccounts = accountOptions.filter(
                               onValueChange={(value) => setInlineEntry({ ...inlineEntry, debitAccount: value })}
                             >
                               <SelectTrigger
+                                ref={debitTriggerRef}
                                 onKeyDown={(e) => handleKeyPress(e, "debit")}
                                 className="border-2 border-gray-400 focus:border-black text-base"
                               >
@@ -898,6 +912,7 @@ const CashAccounts = accountOptions.filter(
                               (DR)
                             </div>
                             <Textarea
+                              ref={narrationRef}
                               value={inlineEntry.narration}
                               onChange={(e) => setInlineEntry({ ...inlineEntry, narration: e.target.value })}
                               onKeyDown={(e) => handleKeyPress(e, "narration")}
@@ -905,14 +920,12 @@ const CashAccounts = accountOptions.filter(
                               rows={3}
                               className="border-2 border-gray-300 focus:border-black transition-colors text-base"
                             />
-                            <div className="sr-only">
-                              Press Enter to apply narration and move to amount; use Shift+Enter for a new line.
-                            </div>
                           </div>
                         </td>
                         <td className="px-6 py-4 text-center border-r border-gray-300">
                           {inlineEntry.step === "amount" || inlineEntry.step === "credit" ? (
                             <Input
+                              ref={amountRef}
                               type="number"
                               step="0.01"
                               value={inlineEntry.amount}
@@ -920,7 +933,6 @@ const CashAccounts = accountOptions.filter(
                               onKeyDown={(e) => handleKeyPress(e, "amount")}
                               className="w-full text-center text-lg font-bold border-2 border-gray-400 focus:border-black"
                               placeholder="0.00"
-                              autoFocus={inlineEntry.step === "amount"}
                             />
                           ) : (
                             <span className="text-gray-400 text-lg">-</span>
@@ -953,25 +965,19 @@ const CashAccounts = accountOptions.filter(
                               disabled={inlineEntry.step !== "credit"}
                             >
                               <SelectTrigger
+                                ref={creditTriggerRef}
                                 onKeyDown={(e) => handleKeyPress(e, "credit")}
                                 className="border-2 border-gray-400 focus:border-black disabled:opacity-50"
                               >
                                 <SelectValue placeholder="Select credit account" />
                               </SelectTrigger>
-                              <SelectContent>
-                                {Object.entries(groupedAccounts).map(([category, accounts]) => (
-                                  <div key={category}>
-                                    <div className="px-2 py-1 text-lg text-blue-800 bg-gray-100 font-bold">
-                                      {category}
-                                    </div>
-                                    {accounts.map((account) => (
-                                      <SelectItem key={account.value} value={account.value} className="text-base pl-4">
-                                        {account.name}
-                                      </SelectItem>
-                                    ))}
-                                  </div>
-                                ))}
-                              </SelectContent>
+                            <SelectContent>
+  {cashAccounts.map((account) => (
+    <SelectItem key={account.value} value={account.value} className="text-base pl-4">
+      {account.name}
+    </SelectItem>
+  ))}
+</SelectContent>
                             </Select>
                             <div className="bg-gray-200 text-black px-3 py-1 rounded-full text-sm font-bold inline-block">
                               (CR)
@@ -1018,12 +1024,12 @@ const CashAccounts = accountOptions.filter(
                   {entries.map((entry) => (
                     <tr
                       key={entry.id}
-                      className="border-t hover:bg-gray-50 transition-colors bg-gray-25 border-gray-200"
+                      className="border-t hover:bg-gray-50 transition-colors bg-gray-25 border-gray-200 print:hover:bg-transparent"
                     >
-                      <td className="px-3 py-4 text-center border-r border-gray-200 font-mono text-base font-semibold text-gray-700">
+                      <td className="px-3 py-4 text-center border-r border-gray-200 font-mono text-base font-semibold text-gray-700 print:py-2 print:text-xs">
                         {entry.serialNo}
                       </td>
-                      <td className="px-6 py-4 border-r border-gray-200">
+                      <td className="px-6 py-4 border-r border-gray-200 print:px-2 print:py-2">
                         {editingId === entry.id ? (
                           <div className="space-y-3">
                             <Select
@@ -1034,12 +1040,19 @@ const CashAccounts = accountOptions.filter(
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
-  {CashAccounts.map((account) => (
-    <SelectItem key={account.value} value={account.value} className="text-base pl-4">
-      {account.name}
-    </SelectItem>
-  ))}
-</SelectContent>
+                                {Object.entries(groupedAccounts).map(([category, accounts]) => (
+                                  <div key={category}>
+                                    <div className="px-2 py-1 text-xs font-semibold text-gray-500 bg-gray-100">
+                                      {category}
+                                    </div>
+                                    {accounts.map((account) => (
+                                      <SelectItem key={account.value} value={account.value} className="text-base pl-4">
+                                        {account.label}
+                                      </SelectItem>
+                                    ))}
+                                  </div>
+                                ))}
+                              </SelectContent>
                             </Select>
                             <Input
                               value={editingEntry.description}
@@ -1050,21 +1063,21 @@ const CashAccounts = accountOptions.filter(
                           </div>
                         ) : (
                           <div>
-                            <span className="font-semibold text-gray-800 text-base">{entry.account}</span>
+                            <span className="font-semibold text-gray-800 text-base print:text-xs">{entry.account}</span>
                             <div
-                              className={`inline-block ml-3 px-2 py-1 rounded-full text-xs font-bold ${entry.entryType === "debit" ? "bg-gray-200 text-black" : "bg-gray-300 text-black"}`}
+                              className={`inline-block ml-3 px-2 py-1 rounded-full text-xs font-bold ${entry.entryType === "debit" ? "bg-gray-200 text-black" : "bg-gray-300 text-black"} print:ml-2 print:px-1 print:text-[10px]`}
                             >
                               ({entry.entryType === "debit" ? "DR" : "CR"})
                             </div>
                             {entry.description && (
-                              <div className="text-base text-gray-600 mt-2 bg-gray-50 p-2 rounded-lg">
+                              <div className="text-base text-gray-600 mt-2 bg-gray-50 p-2 rounded-lg print:text-xs print:mt-1 print:p-1 print:bg-transparent">
                                 {entry.description}
                               </div>
                             )}
                           </div>
                         )}
                       </td>
-                      <td className="px-6 py-4 text-center border-r border-gray-200">
+                      <td className="px-6 py-4 text-center border-r border-gray-200 print:px-2 print:py-2">
                         {editingId === entry.id && editingEntry.entryType === "debit" ? (
                           <Input
                             type="number"
@@ -1074,14 +1087,14 @@ const CashAccounts = accountOptions.filter(
                             className="w-full text-center text-lg font-bold border-2 border-gray-400 focus:border-black"
                           />
                         ) : entry.debitAmount > 0 ? (
-                          <span className="font-mono text-lg font-bold text-black bg-gray-200 px-3 py-1 rounded-lg">
+                          <span className="font-mono text-lg font-bold text-black bg-gray-200 px-3 py-1 rounded-lg print:text-xs print:px-2 print:bg-transparent print:rounded-none">
                             {formatAmount(entry.debitAmount)}
                           </span>
                         ) : (
-                          <span className="text-gray-400 text-lg">-</span>
+                          <span className="text-gray-400 text-lg print:text-xs">-</span>
                         )}
                       </td>
-                      <td className="px-6 py-4 text-center border-r border-gray-200">
+                      <td className="px-6 py-4 text-center border-r border-gray-200 print:px-2 print:py-2">
                         {editingId === entry.id && editingEntry.entryType === "credit" ? (
                           <Input
                             type="number"
@@ -1091,11 +1104,11 @@ const CashAccounts = accountOptions.filter(
                             className="w-full text-center text-lg font-bold border-2 border-gray-400 focus:border-black"
                           />
                         ) : entry.creditAmount > 0 ? (
-                          <span className="font-mono text-lg font-bold text-black bg-gray-300 px-3 py-1 rounded-lg">
+                          <span className="font-mono text-lg font-bold text-black bg-gray-300 px-3 py-1 rounded-lg print:text-xs print:px-2 print:bg-transparent print:rounded-none">
                             {formatAmount(entry.creditAmount)}
                           </span>
                         ) : (
-                          <span className="text-gray-400 text-lg">-</span>
+                          <span className="text-gray-400 text-lg print:text-xs">-</span>
                         )}
                       </td>
                       <td className="px-6 py-4 text-center print:hidden">
@@ -1157,42 +1170,48 @@ const CashAccounts = accountOptions.filter(
                     </tr>
                   )}
 
-                  <tr className="border-t-4 border-blue-300 bg-gradient-to-r from-blue-300 to-blue-300 text-black font-bold">
-                    <td className="px-3 py-4 border-r border-blue-600"></td>
-                    <td className="px-6 py-4 border-r border-blue-600 text-center text-xl">TOTAL</td>
-                    <td className="px-6 py-4 text-center border-r border-blue-600">
-                      <span className="font-mono text-xl text-black px-4 py-2 rounded-lg">
+                  <tr className="border-t-4 border-blue-300 bg-gradient-to-r from-blue-300 to-blue-300 text-black font-bold print:border-t-2 total-row print:bg-blue-300">
+                    <td className="px-3 py-4 border-r border-blue-600 print:px-2 print:py-2"></td>
+                    <td className="px-6 py-4 border-r border-blue-600 text-center text-xl print:px-2 print:py-2 print:text-xs print:text-left">
+                      TOTAL
+                    </td>
+                    <td className="px-6 py-4 text-center border-r border-blue-600 print:px-2 print:py-2">
+                      <span className="font-mono text-xl text-black px-4 py-2 rounded-lg print:text-xs print:px-0 print:py-0">
                         {formatAmount(totalDebit)}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-center border-r border-blue-600">
-                      <span className="font-mono text-xl text-black px-4 py-2 rounded-lg">
+                    <td className="px-6 py-4 text-center border-r border-blue-600 print:px-2 print:py-2">
+                      <span className="font-mono text-xl text-black px-4 py-2 rounded-lg print:text-xs print:px-0 print:py-0">
                         {formatAmount(totalCredit)}
                       </span>
                     </td>
-                    <td className="px-6 py-4"></td>
+                    <td className="px-6 py-4 print:hidden"></td>
                   </tr>
                 </tbody>
               </table>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mt-12 pt-8 border-t-2 border-gray-200 print:gap-4 print:mt-6 print:pt-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mt-12 pt-8 border-t-2 border-gray-200 print:gap-4 print:mt-8 print:pt-6 print:border-t signature-section">
             <div className="text-center">
-              <div className="border-t-2 border-gray-600 pt-3 mt-12 print:mt-6">
-                <span className="text-base font-bold text-black bg-gray-100 px-4 py-2 rounded-full">Prepared By:</span>
+              <div className="border-t-2 border-gray-600 pt-3 mt-12 print:mt-8 print:pt-2 print:border-t">
+                <span className="text-base font-bold text-black bg-gray-100 px-4 py-2 rounded-full print:text-xs print:px-2 print:py-1 print:bg-transparent">
+                  Prepared By:
+                </span>
               </div>
             </div>
             <div className="text-center">
-              <div className="border-t-2 border-gray-700 pt-3 mt-12 print:mt-6">
-                <span className="text-base font-bold text-black bg-gray-200 px-4 py-2 rounded-full">
+              <div className="border-t-2 border-gray-700 pt-3 mt-12 print:mt-8 print:pt-2 print:border-t">
+                <span className="text-base font-bold text-black bg-gray-200 px-4 py-2 rounded-full print:text-xs print:px-2 print:py-1 print:bg-transparent">
                   Supervised By:
                 </span>
               </div>
             </div>
             <div className="text-center">
-              <div className="border-t-2 border-gray-800 pt-3 mt-12 print:mt-6">
-                <span className="text-base font-bold text-black bg-gray-300 px-4 py-2 rounded-full">Received By:</span>
+              <div className="border-t-2 border-gray-800 pt-3 mt-12 print:mt-8 print:pt-2 print:border-t">
+                <span className="text-base font-bold text-black bg-gray-300 px-4 py-2 rounded-full print:text-xs print:px-2 print:py-1 print:bg-transparent">
+                  Received By:
+                </span>
               </div>
             </div>
           </div>
@@ -1230,7 +1249,7 @@ const CashAccounts = accountOptions.filter(
       </AlertDialog>
 
       <div
-        className="hidden print:block mt-8 text-center text-sm print:text-black print:mt-0 print:fixed print:inset-x-0 print:bottom-0 print:bg-white print:py-2 print:border-t print:border-gray-300"
+        className="hidden print:block mt-8 text-center text-sm print:text-[10px] print:text-black print:mt-4 print:pt-2 print:border-t print:border-gray-300"
         aria-label="print-footer"
       >
         Created by Soft-Technix
