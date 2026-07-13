@@ -108,8 +108,8 @@ export default function BankReceiptVoucher() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saving, entries, isEditMode, editingVoucherId, voucherNo, voucherDate])
 
-  const cashAccounts = accountOptions.filter(
-  (account) => account.type === "CASH  ACCOUNT"
+  const bankAccounts = accountOptions.filter(
+  (account) => account.type === "BANK ACCOUNT"
 )
 
 

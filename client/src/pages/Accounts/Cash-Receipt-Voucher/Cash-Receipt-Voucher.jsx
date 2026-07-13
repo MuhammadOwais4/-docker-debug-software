@@ -109,7 +109,7 @@ export default function CashReceiptVoucher() {
   }, [saving, entries, isEditMode, editingVoucherId, voucherNo, voucherDate])
 
   const cashAccounts = accountOptions.filter(
-  (account) => account.type === "CASH  ACCOUNT"
+  (account) => account.type === "CASH ACCOUNT"
 )
 
 
