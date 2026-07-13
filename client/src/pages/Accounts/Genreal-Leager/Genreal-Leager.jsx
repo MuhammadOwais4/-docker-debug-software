@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
+import * as XLSX from "xlsx"
 import ApiHandler from "@/Api/apihandle"
 
 export default function GeneralLedger() {
@@ -23,9 +24,11 @@ export default function GeneralLedger() {
   const [loadingAccounts, setLoadingAccounts]       = useState(false)
   const [openingBalance, setOpeningBalance]         = useState(0)
   const [closingBalance, setClosingBalance]         = useState(0)
+  const [importing, setImporting]                  = useState(false) // NEW
 
   const searchRef   = useRef(null)
   const dropdownRef = useRef(null)
+  const importInputRef = useRef(null) // NEW — hidden file input ref
 
   useEffect(() => {
     const style = document.createElement("style")
@@ -86,6 +89,102 @@ export default function GeneralLedger() {
     setSearchQuery(""); setDropdownOpen(false); setLedgerEntries([])
   }
 
+  // ═══════════════════════ NEW: EXCEL EXPORT ═══════════════════════
+  const exportToExcel = (entries, account, from, to) => {
+    if (!entries || entries.length === 0) {
+      alert("No entries to export.")
+      return
+    }
+
+    const rows = entries.map((e, i) => ({
+      "Sr#": i + 1,
+      "Date": formatDate(e.date),
+      "Voucher No": e.voucherNo,
+      "GRN": e.voucherType === "Purchase" && e.grn ? e.grn : "-",
+      "Type": e.voucherType,
+      "Description": e.description,
+      "Debit": e.debit > 0 ? e.debit : "",
+      "Credit": e.credit > 0 ? e.credit : "",
+      "Balance": e.balance,
+    }))
+
+    // Totals row at the end
+    rows.push({
+      "Sr#": "", "Date": "", "Voucher No": "", "GRN": "", "Type": "",
+      "Description": "TOTAL",
+      "Debit": totalDebits,
+      "Credit": totalCredits,
+      "Balance": closingBalance,
+    })
+
+    const worksheet = XLSX.utils.json_to_sheet(rows)
+
+    // Column widths for readability
+    worksheet["!cols"] = [
+      { wch: 6 }, { wch: 12 }, { wch: 16 }, { wch: 12 }, { wch: 14 },
+      { wch: 40 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+    ]
+
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Ledger")
+
+    const safeName = account.replace(/[^a-zA-Z0-9]/g, "_")
+    XLSX.writeFile(workbook, `ledger_${safeName}_${from}_${to}.xlsx`)
+  }
+
+  // ═══════════════════════ NEW: EXCEL IMPORT ═══════════════════════
+  const handleImportClick = () => {
+    importInputRef.current?.click()
+  }
+
+  const handleImportFileChange = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    try {
+      setImporting(true)
+      const data = await file.arrayBuffer()
+      const workbook = XLSX.read(data, { type: "array" })
+      const firstSheetName = workbook.SheetNames[0]
+      const sheet = workbook.Sheets[firstSheetName]
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" })
+
+      if (rows.length === 0) {
+        alert("The selected file has no rows to import.")
+        return
+      }
+
+      // Expecting columns like: Date, Voucher No, Type, Description, Debit, Credit, Account
+      // Adjust the mapping below to match your Excel's actual column headers.
+      const parsedEntries = rows.map((row) => ({
+        date: row["Date"] || row["date"] || "",
+        voucherNo: row["Voucher No"] || row["VoucherNo"] || row["voucherNo"] || "",
+        voucherType: row["Type"] || row["voucherType"] || "JV",
+        description: row["Description"] || row["description"] || "",
+        debit: parseFloat(row["Debit"] || row["debit"] || 0) || 0,
+        credit: parseFloat(row["Credit"] || row["credit"] || 0) || 0,
+        account: row["Account"] || row["account"] || selectedAccount,
+      }))
+
+      // Send parsed rows to backend — adjust this API method name to match your backend
+      const response = await ApiHandler.importLedgerEntries({ entries: parsedEntries })
+
+      if (response?.success) {
+        alert(`Imported ${parsedEntries.length} entries successfully.`)
+        if (selectedAccount) {
+          loadLedgerEntries(selectedAccount, fromDate, toDate)
+        }
+      } else {
+        alert("Import failed. Please check the file format and try again.")
+      }
+    } catch (error) {
+      alert(`Failed to import file: ${error.message}`)
+    } finally {
+      setImporting(false)
+      e.target.value = "" // reset so the same file can be re-selected later
+    }
+  }
+
   const filteredAccounts = accountOptions.filter((acc) => {
     if (!searchQuery.trim()) return true
     const q = searchQuery.toLowerCase()
@@ -136,11 +235,21 @@ export default function GeneralLedger() {
   if (showLedger) {
     return (
       <div id="print-area" style={{ minHeight:"100vh", background:"#f0f4f8", padding:0, fontFamily:"'Segoe UI', Tahoma, Arial, sans-serif" }}>
+        {/* Hidden file input used for Excel import — shared across views */}
+        <input
+          ref={importInputRef}
+          type="file"
+          accept=".xlsx,.xls,.csv"
+          style={{ display: "none" }}
+          onChange={handleImportFileChange}
+        />
+
         <div className="print:hidden" style={{ background:"#e8edf2", borderBottom:"1px solid #c8d3de", padding:"8px 16px", display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
           <button onClick={handleClose} style={btnStyle("default")}>← Back</button>
           <button onClick={() => loadLedgerEntries(selectedAccount, fromDate, toDate)} disabled={loading} style={btnStyle("primary")}>{loading ? "⏳..." : "🔄 Refresh"}</button>
           <button onClick={() => window.print()} style={btnStyle("success")}>🖨️ Print</button>
-          <button onClick={() => exportCSV(ledgerEntries, selectedAccount, fromDate, toDate, formatDate, formatCurrency)} style={btnStyle("default")}>📥 Export CSV</button>
+          <button onClick={() => exportToExcel(ledgerEntries, selectedAccount, fromDate, toDate)} style={btnStyle("default")}>📥 Export Excel</button>
+          <button onClick={handleImportClick} disabled={importing} style={btnStyle("default")}>{importing ? "⏳ Importing..." : "📤 Import Excel"}</button>
         </div>
 
         <div style={{ background:"linear-gradient(90deg,#1a3c5e,#2563a8)", padding:"16px 20px", margin:"10px 14px", borderRadius:6, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:10 }}>
@@ -235,17 +344,31 @@ export default function GeneralLedger() {
   // ═══════════════════════ FORM VIEW ═════════════════════════════
   return (
     <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#f0f4f8", padding:16, fontFamily:"'Segoe UI', Tahoma, Arial, sans-serif" }}>
+      {/* Hidden file input for Excel import in the form view too */}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".xlsx,.xls,.csv"
+        style={{ display: "none" }}
+        onChange={handleImportFileChange}
+      />
+
       <div style={{ width:"100%", maxWidth:700, background:"#fff", borderRadius:8, border:"1px solid #d1d9e0", boxShadow:"0 4px 24px rgba(0,0,0,0.10)", overflow:"hidden" }}>
 
         {/* Header */}
-        <div style={{ background:"linear-gradient(90deg,#1a3c5e,#2563a8)", padding:"14px 20px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+        <div style={{ background:"linear-gradient(90deg,#1a3c5e,#2563a8)", padding:"14px 20px", display:"flex", justifyContent:"space-between", alignItems:"center", gap:8 }}>
           <div>
             <div style={{ fontSize:10, letterSpacing:"0.15em", color:"rgba(255,255,255,0.6)", fontFamily:"'Courier New',monospace", textTransform:"uppercase", marginBottom:2 }}>ACCOUNT WISE</div>
             <div style={{ fontSize:18, fontWeight:700, color:"#fff" }}>General Ledger</div>
           </div>
-          <button onClick={loadAllAccounts} disabled={loadingAccounts} style={btnStyle("default")}>
-            {loadingAccounts ? "⏳ Loading..." : "🔄 Refresh"}
-          </button>
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={handleImportClick} disabled={importing} style={btnStyle("default")}>
+              {importing ? "⏳..." : "📤 Import Excel"}
+            </button>
+            <button onClick={loadAllAccounts} disabled={loadingAccounts} style={btnStyle("default")}>
+              {loadingAccounts ? "⏳ Loading..." : "🔄 Refresh"}
+            </button>
+          </div>
         </div>
 
         <div style={{ padding:"20px 22px", display:"flex", flexDirection:"column", gap:16 }}>
@@ -378,17 +501,6 @@ export default function GeneralLedger() {
       </div>
     </div>
   )
-}
-
-function exportCSV(entries, account, fromDate, toDate, formatDate, formatCurrency) {
-  const csv = [
-    ["Sr#","Date","Voucher No","GRN","Type","Description","Debit","Credit","Balance"].join(","),
-    ...entries.map((e,i) => [i+1, formatDate(e.date), e.voucherNo, e.voucherType==="Purchase"&&e.grn?e.grn:"-", e.voucherType, `"${e.description}"`, formatCurrency(e.debit), formatCurrency(e.credit), formatCurrency(e.balance)].join(","))
-  ].join("\n")
-  const a = document.createElement("a")
-  a.href = URL.createObjectURL(new Blob([csv], { type:"text/csv" }))
-  a.download = `ledger_${account.replace(/[^a-zA-Z0-9]/g,"_")}_${fromDate}_${toDate}.csv`
-  a.click()
 }
 
 const inputStyle = { width:"100%", boxSizing:"border-box", padding:"4px 8px", height:30, fontSize:12, border:"1px solid #c8d3de", borderRadius:3, outline:"none", background:"#fff", color:"#1e293b", fontFamily:"'Segoe UI', Arial, sans-serif" }
