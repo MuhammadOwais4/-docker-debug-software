@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -54,6 +54,12 @@ export default function BankPaymentVoucher() {
   const [deleting, setDeleting] = useState(false)
   const [readyToPrint, setReadyToPrint] = useState(false)
 
+  // refs used to auto-focus the next field in the entry flow (debit -> narration -> amount -> credit)
+  const debitTriggerRef = useRef(null)
+  const narrationRef = useRef(null)
+  const amountRef = useRef(null)
+  const creditTriggerRef = useRef(null)
+
   useEffect(() => {
     const generateUniqueVoucherNo = () => {
       const timestamp = Date.now()
@@ -71,6 +77,36 @@ export default function BankPaymentVoucher() {
     loadAllVouchers()
   }, [])
 
+  // Auto-focus the field for the current step, so the whole entry can be filled with keyboard only
+  useEffect(() => {
+    if (!showInlineEntry) return
+
+    if (inlineEntry.step === "debit" && debitTriggerRef.current) {
+      debitTriggerRef.current.focus()
+    } else if (inlineEntry.step === "narration" && narrationRef.current) {
+      narrationRef.current.focus()
+    } else if (inlineEntry.step === "amount" && amountRef.current) {
+      amountRef.current.focus()
+    } else if (inlineEntry.step === "credit" && creditTriggerRef.current) {
+      creditTriggerRef.current.focus()
+    }
+  }, [inlineEntry.step, showInlineEntry])
+
+  // Ctrl+Enter (or Cmd+Enter on Mac) saves the voucher from anywhere on the page
+  useEffect(() => {
+    const handleGlobalSaveShortcut = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault()
+        if (!saving && entries.length > 0) {
+          saveVoucher()
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleGlobalSaveShortcut)
+    return () => window.removeEventListener("keydown", handleGlobalSaveShortcut)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saving, entries, isEditMode, editingVoucherId, voucherNo, voucherDate])
 
   const bankAccounts = accountOptions.filter(
   (account) => account.type === "BANK ACCOUNT"
@@ -347,12 +383,15 @@ export default function BankPaymentVoucher() {
         e.preventDefault()
       }
       if (action === "debit" && inlineEntry.debitAccount) {
+        e.preventDefault()
         setInlineEntry({ ...inlineEntry, step: "narration" })
       } else if (action === "narration" && inlineEntry.narration?.trim()) {
         setInlineEntry({ ...inlineEntry, step: "amount" })
       } else if (action === "amount" && inlineEntry.amount) {
+        e.preventDefault()
         setInlineEntry({ ...inlineEntry, step: "credit" })
       } else if (action === "credit" && inlineEntry.creditAccount) {
+        e.preventDefault()
         handleInlineEntrySubmit()
       }
     }
@@ -808,6 +847,7 @@ export default function BankPaymentVoucher() {
                   onClick={saveVoucher}
                   disabled={saving || entries.length === 0}
                   className="bg-white/20 border-white/30 text-black hover:bg-white/30"
+                  title="Ctrl+Enter to save from anywhere"
                 >
                   {saving ? "Saving..." : isEditMode ? "Update Voucher" : "Save Voucher"}
                 </Button>
@@ -847,6 +887,7 @@ export default function BankPaymentVoucher() {
                               onValueChange={(value) => setInlineEntry({ ...inlineEntry, debitAccount: value })}
                             >
                               <SelectTrigger
+                                ref={debitTriggerRef}
                                 onKeyDown={(e) => handleKeyPress(e, "debit")}
                                 className="border-2 border-gray-400 focus:border-black text-base"
                               >
@@ -871,6 +912,7 @@ export default function BankPaymentVoucher() {
                               (DR)
                             </div>
                             <Textarea
+                              ref={narrationRef}
                               value={inlineEntry.narration}
                               onChange={(e) => setInlineEntry({ ...inlineEntry, narration: e.target.value })}
                               onKeyDown={(e) => handleKeyPress(e, "narration")}
@@ -883,6 +925,7 @@ export default function BankPaymentVoucher() {
                         <td className="px-6 py-4 text-center border-r border-gray-300">
                           {inlineEntry.step === "amount" || inlineEntry.step === "credit" ? (
                             <Input
+                              ref={amountRef}
                               type="number"
                               step="0.01"
                               value={inlineEntry.amount}
@@ -890,7 +933,6 @@ export default function BankPaymentVoucher() {
                               onKeyDown={(e) => handleKeyPress(e, "amount")}
                               className="w-full text-center text-lg font-bold border-2 border-gray-400 focus:border-black"
                               placeholder="0.00"
-                              autoFocus={inlineEntry.step === "amount"}
                             />
                           ) : (
                             <span className="text-gray-400 text-lg">-</span>
@@ -923,6 +965,7 @@ export default function BankPaymentVoucher() {
                               disabled={inlineEntry.step !== "credit"}
                             >
                               <SelectTrigger
+                                ref={creditTriggerRef}
                                 onKeyDown={(e) => handleKeyPress(e, "credit")}
                                 className="border-2 border-gray-400 focus:border-black disabled:opacity-50"
                               >
