@@ -1,9 +1,11 @@
 "use client"
 
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, useRef } from "react"
+import * as XLSX from "xlsx"
 import {
   Search,
   Download,
+  Upload,
   Printer,
   RefreshCw,
 } from "lucide-react"
@@ -32,6 +34,9 @@ export default function TrialBalanceIntegrated() {
   const [loading, setLoading] = useState(false)
   const [searchTerm, setSearchTerm] = useState("")
   const [error, setError] = useState(null)
+  const [importing, setImporting] = useState(false) // NEW
+
+  const importInputRef = useRef(null) // NEW — hidden file input for Excel import
 
   useEffect(() => {
     const style = document.createElement('style')
@@ -73,7 +78,6 @@ export default function TrialBalanceIntegrated() {
     try {
       console.log("📊 Fetching all accounts from ledger API...")
       
-      // Fetch all accounts
       const accountsResponse = await fetch(`${API_BASE_URL}/ledgers/accounts`)
       const accountsData = await accountsResponse.json()
       
@@ -83,7 +87,6 @@ export default function TrialBalanceIntegrated() {
 
       console.log(`✅ Loaded ${accountsData.count} accounts`)
 
-      // For each account, fetch its ledger data
       const trialBalanceEntries = await Promise.all(
         accountsData.data.map(async (account) => {
           try {
@@ -103,7 +106,6 @@ export default function TrialBalanceIntegrated() {
               return null
             }
 
-            // Calculate totals from ledger entries
             let currentDebit = 0
             let currentCredit = 0
 
@@ -115,7 +117,6 @@ export default function TrialBalanceIntegrated() {
             const openingBalance = ledgerData.data.summary.openingBalance || 0
             const closingBalance = ledgerData.data.summary.closingBalance || 0
 
-            // Determine opening debit/credit based on normal balance
             const normalBalance = account.normalBalance || (account.category === 'Assets' || account.category === 'Expenses' ? 'debit' : 'credit')
             
             let openingDebit = 0
@@ -135,7 +136,6 @@ export default function TrialBalanceIntegrated() {
               }
             }
 
-            // Determine closing debit/credit based on normal balance
             let closingDebit = 0
             let closingCredit = 0
             
@@ -153,9 +153,6 @@ export default function TrialBalanceIntegrated() {
               }
             }
 
-            // ✅ CRITICAL FIX: Purchase Discount Special Handling
-            // Purchase Discount is a REVENUE account (credit normal balance)
-            // So it MUST show in CREDIT columns, not DEBIT
             if (account.code === 'PURCH-DISC' || account.name === 'PURCHASES DISCOUNT') {
               console.log(`🔧 Fixing Purchase Discount display:`, {
                 code: account.code,
@@ -166,10 +163,7 @@ export default function TrialBalanceIntegrated() {
                 category: account.category
               })
               
-              // Purchase Discount should ALWAYS show in CREDIT side
-              // Because it's a REVENUE (contra-expense) account
               if (closingBalance !== 0) {
-                // Force to show in credit column
                 closingDebit = 0
                 closingCredit = Math.abs(closingBalance)
               }
@@ -177,9 +171,6 @@ export default function TrialBalanceIntegrated() {
               console.log(`✅ After fix - ClosingDebit: ${closingDebit}, ClosingCredit: ${closingCredit}`)
             }
 
-            // ✅ CRITICAL FIX: Sales Discount Special Handling
-            // Sales Discount is an EXPENSE account (debit normal balance)
-            // So it MUST show in DEBIT columns
             if (account.code === 'SALES-DISC' || account.name === 'SALES DISCOUNT') {
               console.log(`🔧 Fixing Sales Discount display:`, {
                 code: account.code,
@@ -190,9 +181,7 @@ export default function TrialBalanceIntegrated() {
                 category: account.category
               })
               
-              // Sales Discount should ALWAYS show in DEBIT side
               if (closingBalance !== 0) {
-                // Force to show in debit column
                 closingCredit = 0
                 closingDebit = Math.abs(closingBalance)
               }
@@ -222,7 +211,6 @@ export default function TrialBalanceIntegrated() {
         })
       )
 
-      // Filter out nulls and accounts without activity
       const activeAccounts = trialBalanceEntries.filter(
         (entry) => entry !== null && entry.hasActivity
       )
@@ -276,62 +264,116 @@ export default function TrialBalanceIntegrated() {
     }
   )
 
+  // ═══════════════════════ NEW: REAL EXCEL EXPORT (.xlsx) ═══════════════════════
   const handleExcelExport = () => {
-    // Create CSV content
-    const headers = [
-      "Account Code",
-      "Account Name",
-      "Category",
-      "Opening Debit",
-      "Opening Credit",
-      "Current Debit",
-      "Current Credit",
-      "Closing Debit",
-      "Closing Credit",
+    if (filteredData.length === 0) {
+      alert("No data to export.")
+      return
+    }
+
+    const rows = filteredData.map((row) => ({
+      "Account Code": row.code,
+      "Account Name": row.name,
+      "Category": row.category,
+      "Opening Debit": row.openingDebit || "",
+      "Opening Credit": row.openingCredit || "",
+      "Current Debit": row.currentDebit || "",
+      "Current Credit": row.currentCredit || "",
+      "Closing Debit": row.closingDebit || "",
+      "Closing Credit": row.closingCredit || "",
+    }))
+
+    // Totals row
+    rows.push({
+      "Account Code": "TOTAL",
+      "Account Name": "",
+      "Category": "",
+      "Opening Debit": totals.openingDebit,
+      "Opening Credit": totals.openingCredit,
+      "Current Debit": totals.currentDebit,
+      "Current Credit": totals.currentCredit,
+      "Closing Debit": totals.closingDebit,
+      "Closing Credit": totals.closingCredit,
+    })
+
+    const worksheet = XLSX.utils.json_to_sheet(rows)
+
+    worksheet["!cols"] = [
+      { wch: 14 }, { wch: 28 }, { wch: 14 },
+      { wch: 14 }, { wch: 14 }, { wch: 14 },
+      { wch: 14 }, { wch: 14 }, { wch: 14 },
     ]
-    
-    const rows = filteredData.map((row) => [
-      row.code,
-      row.name,
-      row.category,
-      row.openingDebit,
-      row.openingCredit,
-      row.currentDebit,
-      row.currentCredit,
-      row.closingDebit,
-      row.closingCredit,
-    ])
 
-    const totalsRow = [
-      "TOTAL",
-      "",
-      "",
-      totals.openingDebit,
-      totals.openingCredit,
-      totals.currentDebit,
-      totals.currentCredit,
-      totals.closingDebit,
-      totals.closingCredit,
-    ]
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Trial Balance")
+    XLSX.writeFile(workbook, `trial_balance_${startDate}_${endDate}.xlsx`)
+  }
 
-    const csvContent = [
-      headers.join(","),
-      ...rows.map(row => row.join(",")),
-      "",
-      totalsRow.join(",")
-    ].join("\n")
+  // ═══════════════════════ NEW: EXCEL IMPORT ═══════════════════════
+  const handleImportClick = () => {
+    importInputRef.current?.click()
+  }
 
-    const blob = new Blob([csvContent], { type: "text/csv" })
-    const url = window.URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `trial_balance_${startDate}_${endDate}.csv`
-    a.click()
-    window.URL.revokeObjectURL(url)
+  const handleImportFileChange = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    try {
+      setImporting(true)
+      const data = await file.arrayBuffer()
+      const workbook = XLSX.read(data, { type: "array" })
+      const firstSheetName = workbook.SheetNames[0]
+      const sheet = workbook.Sheets[firstSheetName]
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" })
+
+      if (rows.length === 0) {
+        alert("The selected file has no rows to import.")
+        return
+      }
+
+      // Expecting columns like: Account Code, Account Name, Category, Opening Debit/Credit
+      // Adjust the mapping below to match your Excel's actual column headers.
+      const parsedAccounts = rows.map((row) => ({
+        code: row["Account Code"] || row["code"] || "",
+        name: row["Account Name"] || row["name"] || "",
+        category: row["Category"] || row["category"] || "",
+        openingDebit: parseFloat(row["Opening Debit"] || 0) || 0,
+        openingCredit: parseFloat(row["Opening Credit"] || 0) || 0,
+      }))
+
+      // Send parsed rows to backend — adjust endpoint to match your actual API
+      const response = await fetch(`${API_BASE_URL}/ledgers/import-accounts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accounts: parsedAccounts }),
+      })
+      const result = await response.json()
+
+      if (result.success) {
+        alert(`Imported ${parsedAccounts.length} accounts successfully.`)
+        calculateTrialBalance()
+      } else {
+        alert("Import failed. Please check the file format and try again.")
+      }
+    } catch (error) {
+      alert(`Failed to import file: ${error.message}`)
+    } finally {
+      setImporting(false)
+      e.target.value = ""
+    }
   }
 
   return (
     <div className="min-h-screen p-6 bg-gradient-to-br from-gray-50 via-slate-50 to-zinc-50">
+      {/* Hidden file input for Excel import */}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".xlsx,.xls,.csv"
+        style={{ display: "none" }}
+        onChange={handleImportFileChange}
+      />
+
       <div className="max-w-[1400px] mx-auto bg-white shadow-lg rounded-lg overflow-hidden print-container">
         
         {/* Header */}
@@ -345,6 +387,15 @@ export default function TrialBalanceIntegrated() {
             >
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
               Refresh Data
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleImportClick}
+              disabled={importing}
+              className="flex items-center gap-2 bg-transparent"
+            >
+              <Upload className="h-4 w-4" />
+              {importing ? "Importing..." : "Import Excel"}
             </Button>
           </div>
 
@@ -412,12 +463,20 @@ export default function TrialBalanceIntegrated() {
           </div>
           <div className="flex items-center gap-3">
             <Button
+              onClick={handleImportClick}
+              variant="outline"
+              disabled={importing}
+              className="flex items-center gap-2 bg-transparent"
+            >
+              <Upload size={16} /> {importing ? "Importing..." : "Import Excel"}
+            </Button>
+            <Button
               onClick={handleExcelExport}
               variant="outline"
               disabled={filteredData.length === 0}
               className="flex items-center gap-2 bg-transparent"
             >
-              <Download size={16} /> Export CSV
+              <Download size={16} /> Export Excel
             </Button>
             <Button
               onClick={() => window.print()}

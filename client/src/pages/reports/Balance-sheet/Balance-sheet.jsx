@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from "react";
-import { Calendar, RefreshCw, Printer } from "lucide-react";
+import React, { useState, useEffect, useRef } from "react";
+import * as XLSX from "xlsx";
+import { Calendar, RefreshCw, Printer, Download, Upload } from "lucide-react";
 
 function BalanceSheet() {
   const [startDate, setStartDate] = useState("");
@@ -9,6 +10,9 @@ function BalanceSheet() {
   
   const [vendors, setVendors] = useState([]);
   const [loadingVendors, setLoadingVendors] = useState(false);
+  const [importing, setImporting] = useState(false); // NEW
+
+  const importInputRef = useRef(null); // NEW
   
   const [currentAssets, setCurrentAssets] = useState([]);
   const [fixedAssets, setFixedAssets] = useState([]);
@@ -97,7 +101,6 @@ function BalanceSheet() {
     }
   };
 
-  // ✅ NEW: Fetch Net Profit/Loss from P&L API
   const loadNetProfit = async () => {
     try {
       console.log("📊 Fetching Net Profit/Loss from P&L API...");
@@ -121,7 +124,6 @@ function BalanceSheet() {
     }
   };
 
-  // ✅ NEW: Fetch Tax Account Balances (WHT Payable + Advance Tax)
   const loadTaxAccountBalances = async () => {
     const TAX_CODES = [
       { code: "TAX-0025-PAY", name: "Withholding Tax 0.25% Payable", category: "Liabilities", type: "TAX-WHT-PAYABLE" },
@@ -169,7 +171,6 @@ function BalanceSheet() {
       
       console.log(`📊 Fetching Balance Sheet from ${startDate} to ${endDate}`);
 
-      // Load closing stock, net profit, and tax accounts in parallel
       const [stockValue, netProfitValue, taxAccounts] = await Promise.all([
         loadClosingStock(),
         loadNetProfit(),
@@ -190,7 +191,6 @@ function BalanceSheet() {
       const longTermLiabilitiesList = [];
       const equityList = [];
 
-      // Load vendor balances from ledger
       for (const vendor of vendors) {
         try {
           const params = new URLSearchParams({
@@ -236,7 +236,6 @@ function BalanceSheet() {
         }
       }
 
-      // ✅ Add WHT Payable accounts to Current Liabilities
       const whtAccounts = taxAccounts.filter(t => t.type === "TAX-WHT-PAYABLE");
       whtAccounts.forEach(wht => {
         currentLiabilitiesList.push({
@@ -251,7 +250,6 @@ function BalanceSheet() {
         console.log(`✅ Added WHT Payable to Current Liabilities: ${wht.name} = ${wht.balance}`);
       });
 
-      // ✅ Add Advance Tax accounts to Current Assets
       const advanceTaxAccounts = taxAccounts.filter(t => t.type === "TAX-ADVANCE");
       advanceTaxAccounts.forEach(adv => {
         currentAssetsList.push({
@@ -266,21 +264,17 @@ function BalanceSheet() {
         console.log(`✅ Added Advance Tax to Current Assets: ${adv.name} = ${adv.balance}`);
       });
 
-      // Process other accounts
       accountsData.data.forEach(account => {
         const balance = account.balance || 0;
         const absBalance = Math.abs(balance);
         
-        // Skip vendor accounts (already loaded above)
         const isVendorAccount = account.category === 'Liabilities' && 
                                (account.type === 'PAYABLES' || account.type?.toLowerCase().includes('payable'));
         if (isVendorAccount) return;
 
-        // Skip tax accounts (already added above)
         const isTaxAcc = account.code?.startsWith("TAX-");
         if (isTaxAcc) return;
 
-        // Skip zero balance accounts
         if (absBalance === 0) return;
 
         let displayName = account.name || account.accountName || 'Unknown Account';
@@ -325,7 +319,6 @@ function BalanceSheet() {
         }
       });
 
-      // Add Closing Stock to Current Assets
       currentAssetsList.push({
         code: 'CLOSING_STOCK',
         name: 'Closing Stock (Inventory)',
@@ -336,14 +329,13 @@ function BalanceSheet() {
         isClosingStock: true
       });
 
-      // ✅ Add Net Profit/Loss to Equity list
       if (netProfitValue !== null) {
         equityList.push({
           code: 'NET_PROFIT',
           name: netProfitValue >= 0 ? 'Net Profit (Current Period)' : 'Net Loss (Current Period)',
           originalName: 'Net Profit/Loss',
           type: 'NET_PROFIT',
-          balance: netProfitValue, // can be negative
+          balance: netProfitValue,
           category: 'Equity',
           isNetProfit: true
         });
@@ -357,7 +349,6 @@ function BalanceSheet() {
       setLongTermLiabilities(longTermLiabilitiesList);
       setEquity(equityList);
 
-      // Calculate totals
       const currentAssetsTotal = currentAssetsList.reduce((sum, acc) => sum + acc.balance, 0);
       const fixedAssetsTotal = fixedAssetsList.reduce((sum, acc) => sum + acc.balance, 0);
       const assetsTotal = currentAssetsTotal + fixedAssetsTotal;
@@ -366,7 +357,6 @@ function BalanceSheet() {
       const longTermLiabilitiesTotal = longTermLiabilitiesList.reduce((sum, acc) => sum + acc.balance, 0);
       const liabilitiesTotal = currentLiabilitiesTotal + longTermLiabilitiesTotal;
 
-      // ✅ For equity total, use actual value (netProfit can be negative)
       const equityTotal = equityList.reduce((sum, acc) => sum + acc.balance, 0);
       const liabilitiesEquityTotal = liabilitiesTotal + equityTotal;
 
@@ -420,10 +410,115 @@ function BalanceSheet() {
 
   const handlePrint = () => window.print();
 
+  // ═══════════════════════ NEW: REAL EXCEL EXPORT (.xlsx) ═══════════════════════
+  const handleExcelExport = () => {
+    const rows = [];
+
+    rows.push({ Section: "ASSETS", Account: "", Amount: "" });
+    rows.push({ Section: "Current Assets", Account: "", Amount: "" });
+    currentAssets.forEach(a => rows.push({ Section: "", Account: a.name, Amount: a.balance }));
+    rows.push({ Section: "", Account: "Total Current Assets", Amount: totalCurrentAssets });
+
+    rows.push({ Section: "Fixed Assets", Account: "", Amount: "" });
+    fixedAssets.forEach(a => rows.push({ Section: "", Account: a.name, Amount: a.balance }));
+    rows.push({ Section: "", Account: "Total Fixed Assets", Amount: totalFixedAssets });
+
+    rows.push({ Section: "", Account: "TOTAL ASSETS", Amount: totalAssets });
+    rows.push({ Section: "", Account: "", Amount: "" });
+
+    rows.push({ Section: "LIABILITIES & EQUITY", Account: "", Amount: "" });
+    rows.push({ Section: "Current Liabilities", Account: "", Amount: "" });
+    currentLiabilities.forEach(l => rows.push({ Section: "", Account: l.name, Amount: l.balance }));
+    rows.push({ Section: "", Account: "Total Current Liabilities", Amount: totalCurrentLiabilities });
+
+    if (longTermLiabilities.length > 0) {
+      rows.push({ Section: "Long-Term Liabilities", Account: "", Amount: "" });
+      longTermLiabilities.forEach(l => rows.push({ Section: "", Account: l.name, Amount: l.balance }));
+      rows.push({ Section: "", Account: "Total Long-Term Liabilities", Amount: totalLongTermLiabilities });
+    }
+
+    rows.push({ Section: "Owner's Equity", Account: "", Amount: "" });
+    equity.forEach(e => rows.push({ Section: "", Account: e.name, Amount: e.balance }));
+    rows.push({ Section: "", Account: "Total Owner's Equity", Amount: totalEquity });
+
+    rows.push({ Section: "", Account: "TOTAL LIABILITIES AND EQUITY", Amount: totalLiabilitiesEquity });
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    worksheet["!cols"] = [{ wch: 22 }, { wch: 40 }, { wch: 18 }];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Balance Sheet");
+    XLSX.writeFile(workbook, `balance_sheet_${startDate}_${endDate}.xlsx`);
+  };
+
+  // ═══════════════════════ NEW: EXCEL IMPORT ═══════════════════════
+  const handleImportClick = () => {
+    importInputRef.current?.click();
+  };
+
+  const handleImportFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setImporting(true);
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data, { type: "array" });
+      const firstSheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[firstSheetName];
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+      if (rows.length === 0) {
+        alert("The selected file has no rows to import.");
+        return;
+      }
+
+      // Expecting columns: Account Code, Account Name, Category, Opening Balance
+      // Adjust mapping below to match your Excel's actual column headers.
+      const parsedAccounts = rows
+        .filter(r => r["Account Code"] || r["code"])
+        .map((row) => ({
+          code: row["Account Code"] || row["code"] || "",
+          name: row["Account Name"] || row["name"] || "",
+          category: row["Category"] || row["category"] || "",
+          openingBalance: parseFloat(row["Opening Balance"] || row["Amount"] || 0) || 0,
+        }));
+
+      // Send parsed rows to backend — adjust endpoint to match your actual API
+      const response = await fetch(`https://owaisbackend.duckdns.org/api/ledgers/import-accounts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accounts: parsedAccounts }),
+      });
+      const result = await response.json();
+
+      if (result.success) {
+        alert(`Imported ${parsedAccounts.length} accounts successfully.`);
+        loadBalanceSheetData();
+      } else {
+        alert("Import failed. Please check the file format and try again.");
+      }
+    } catch (error) {
+      alert(`Failed to import file: ${error.message}`);
+    } finally {
+      setImporting(false);
+      e.target.value = "";
+    }
+  };
+
   const vendorCount = currentLiabilities.filter(l => l.isVendor).length;
 
   return (
     <div style={{ maxWidth: "1000px", margin: "0 auto", padding: "20px", fontFamily: "system-ui, -apple-system, sans-serif" }}>
+      {/* Hidden file input for Excel import */}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".xlsx,.xls,.csv"
+        style={{ display: "none" }}
+        onChange={handleImportFileChange}
+      />
+
       {/* Header Controls */}
       <div style={{ marginBottom: "30px", padding: "20px", backgroundColor: "#f8f9fa", borderRadius: "8px", boxShadow: "0 2px 4px rgba(0,0,0,0.1)" }}>
         <div style={{ display: "flex", alignItems: "flex-start", gap: "15px", flexWrap: "wrap" }}>
@@ -448,6 +543,16 @@ function BalanceSheet() {
             style={{ padding: "10px 20px", backgroundColor: loading || loadingVendors ? "#6c757d" : "#0d6efd", color: "white", border: "none", borderRadius: "6px", cursor: loading || loadingVendors ? "not-allowed" : "pointer", fontWeight: "500", fontSize: "14px", display: "flex", alignItems: "center", gap: "8px", marginTop: "24px" }}>
             <RefreshCw style={{ width: "16px", height: "16px" }} />
             {loading || loadingVendors ? "Loading..." : "Refresh Data"}
+          </button>
+          <button onClick={handleImportClick} disabled={importing}
+            style={{ padding: "10px 20px", backgroundColor: importing ? "#6c757d" : "#6f42c1", color: "white", border: "none", borderRadius: "6px", cursor: importing ? "not-allowed" : "pointer", fontWeight: "500", fontSize: "14px", display: "flex", alignItems: "center", gap: "8px", marginTop: "24px" }}>
+            <Upload style={{ width: "16px", height: "16px" }} />
+            {importing ? "Importing..." : "Import Excel"}
+          </button>
+          <button onClick={handleExcelExport} disabled={loading || loadingVendors}
+            style={{ padding: "10px 20px", backgroundColor: "#fd7e14", color: "white", border: "none", borderRadius: "6px", cursor: loading || loadingVendors ? "not-allowed" : "pointer", fontWeight: "500", fontSize: "14px", display: "flex", alignItems: "center", gap: "8px", marginTop: "24px" }}>
+            <Download style={{ width: "16px", height: "16px" }} />
+            Export Excel
           </button>
           <button onClick={handlePrint} disabled={loading || loadingVendors}
             style={{ padding: "10px 20px", backgroundColor: "#198754", color: "white", border: "none", borderRadius: "6px", cursor: loading || loadingVendors ? "not-allowed" : "pointer", fontWeight: "500", fontSize: "14px", display: "flex", alignItems: "center", gap: "8px", marginTop: "24px" }}>
@@ -481,14 +586,10 @@ function BalanceSheet() {
         </div>
       ) : (
         <>
-          {/* ═══════════════════════════════════════════════════ */}
-          {/* ASSETS SECTION */}
-          {/* ═══════════════════════════════════════════════════ */}
           <div style={{ backgroundColor: "#3f64a8", color: "white", fontWeight: "bold", padding: "10px 15px", fontSize: "16px" }}>
             Assets
           </div>
 
-          {/* Current Assets */}
           <div style={{ background: "#e6edf8", fontWeight: "700", padding: "8px 15px", marginTop: "10px" }}>
             Current Assets
           </div>
@@ -517,7 +618,6 @@ function BalanceSheet() {
             <span style={{ fontFamily: "monospace" }}>{formatCurrency(totalCurrentAssets)}</span>
           </div>
 
-          {/* Fixed Assets */}
           <div style={{ background: "#e6edf8", fontWeight: "700", padding: "8px 15px", marginTop: "15px" }}>
             Fixed (Long-Term) Assets
           </div>
@@ -536,20 +636,15 @@ function BalanceSheet() {
             <span style={{ fontFamily: "monospace" }}>{formatCurrency(totalFixedAssets)}</span>
           </div>
 
-          {/* Total Assets */}
           <div style={{ display: "flex", justifyContent: "space-between", padding: "15px", backgroundColor: "#d1e7dd", fontWeight: "700", fontSize: "17px", marginTop: "15px", borderTop: "2px solid #0f5132", borderBottom: "2px solid #0f5132" }}>
             <span>TOTAL ASSETS</span>
             <span style={{ fontFamily: "monospace", color: "#0f5132" }}>{formatCurrency(totalAssets)}</span>
           </div>
 
-          {/* ═══════════════════════════════════════════════════ */}
-          {/* LIABILITIES & EQUITY SECTION */}
-          {/* ═══════════════════════════════════════════════════ */}
           <div style={{ backgroundColor: "#3f64a8", color: "white", fontWeight: "bold", padding: "10px 15px", fontSize: "16px", marginTop: "30px" }}>
             Liabilities and Owner's Equity
           </div>
 
-          {/* Current Liabilities */}
           <div style={{ background: "#e6edf8", fontWeight: "700", padding: "8px 15px", marginTop: "10px" }}>
             Current Liabilities ({vendorCount} vendors)
           </div>
@@ -578,7 +673,6 @@ function BalanceSheet() {
             <span style={{ fontFamily: "monospace" }}>{formatCurrency(totalCurrentLiabilities)}</span>
           </div>
 
-          {/* Long-Term Liabilities */}
           {longTermLiabilities.length > 0 && (
             <>
               <div style={{ background: "#e6edf8", fontWeight: "700", padding: "8px 15px", marginTop: "15px" }}>
@@ -599,7 +693,6 @@ function BalanceSheet() {
             </>
           )}
 
-          {/* Owner's Equity */}
           <div style={{ background: "#e6edf8", fontWeight: "700", padding: "8px 15px", marginTop: "15px" }}>
             Owner's Equity
           </div>
@@ -642,7 +735,6 @@ function BalanceSheet() {
             </span>
           </div>
 
-          {/* Total Liabilities & Equity */}
           <div style={{ display: "flex", justifyContent: "space-between", padding: "15px", backgroundColor: "#cfe2ff", fontWeight: "700", fontSize: "17px", marginTop: "15px", borderTop: "2px solid #084298", borderBottom: "2px solid #084298" }}>
             <span>TOTAL LIABILITIES AND OWNER'S EQUITY</span>
             <span style={{ fontFamily: "monospace", color: "#084298" }}>
@@ -650,7 +742,6 @@ function BalanceSheet() {
             </span>
           </div>
 
-          {/* Balance Check */}
           {Math.abs(totalAssets - totalLiabilitiesEquity) > 0.01 ? (
             <div style={{ marginTop: "20px", padding: "15px", backgroundColor: "#fff3cd", border: "1px solid #ffc107", borderRadius: "6px", color: "#856404" }}>
               ⚠️ Balance Sheet is not balanced!
