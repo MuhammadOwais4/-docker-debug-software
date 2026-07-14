@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
+import * as XLSX from "xlsx"
 import ApiHandler from "@/Api/apihandle"
 import {
   BookOpen,
@@ -8,6 +9,7 @@ import {
   Package,
   RefreshCw,
   Download,
+  Upload,
   Printer,
   Filter,
   Search,
@@ -176,6 +178,7 @@ const StockLedger = () => {
   const [sales, setSales] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [importing, setImporting] = useState(false) // NEW
 
   const [startDate, setStartDate] = useState(thirtyDaysAgo())
   const [endDate, setEndDate] = useState(today())
@@ -186,6 +189,8 @@ const StockLedger = () => {
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(25)
   const [expandedRow, setExpandedRow] = useState(null)
+
+  const importInputRef = useRef(null) // NEW — hidden file input ref
 
   const fetchData = async () => {
     try {
@@ -262,26 +267,108 @@ const StockLedger = () => {
 
   const categories = [...new Set(products.map((p) => p.category).filter(Boolean))]
 
+  // ═══════════════════════ NEW: REAL EXCEL EXPORT (.xlsx) — replaces old CSV export ═══════════════════════
   const handleExport = () => {
-    const rows = [
-      ["Date", "Type", "Product", "Category", "GRN No", "Invoice", "Unit In", "Unit Out", "Rate", "Balance Qty", "Balance Value", "Vendor/Customer"],
-      ...filtered.map((r) => [
-        fmtDate(r.date), r.type, r.productName, r.category,
-        r.grn || "—", r.invoice || "—",
-        r.unitIn || "", r.unitOut || "",
-        r.rate,
-        r.balance, r.fifoValue,
-        r.vendor || r.customer || "—",
-      ]),
-    ].map((row) => row.join(",")).join("\n")
+    if (filtered.length === 0) {
+      alert("No data to export.")
+      return
+    }
 
-    const blob = new Blob([rows], { type: "text/csv" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `stock-ledger-${today()}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    const rows = filtered.map((r) => ({
+      "Date": fmtDate(r.date),
+      "Type": r.type,
+      "Product": r.productName,
+      "Category": r.category || "—",
+      "GRN No": r.grn || "—",
+      "Invoice": r.invoice || "—",
+      "Unit In": r.unitIn || "",
+      "Unit Out": r.unitOut || "",
+      "Rate": r.rate,
+      "Balance Qty": r.balance,
+      "Balance Value": r.fifoValue,
+      "Vendor/Customer": r.vendor || r.customer || "—",
+    }))
+
+    // Totals row
+    rows.push({
+      "Date": "", "Type": "", "Product": "", "Category": "", "GRN No": "", "Invoice": "",
+      "Unit In": stats.totalIn,
+      "Unit Out": stats.totalOut,
+      "Rate": "", "Balance Qty": "", "Balance Value": "",
+      "Vendor/Customer": "TOTAL",
+    })
+
+    const worksheet = XLSX.utils.json_to_sheet(rows)
+
+    worksheet["!cols"] = [
+      { wch: 12 }, { wch: 6 }, { wch: 24 }, { wch: 14 }, { wch: 12 }, { wch: 12 },
+      { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 20 },
+    ]
+
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Stock Ledger")
+    XLSX.writeFile(workbook, `stock-ledger-${startDate}_${endDate}.xlsx`)
+  }
+
+  // ═══════════════════════ NEW: EXCEL IMPORT ═══════════════════════
+  const handleImportClick = () => {
+    importInputRef.current?.click()
+  }
+
+  const handleImportFileChange = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    try {
+      setImporting(true)
+      const data = await file.arrayBuffer()
+      const workbook = XLSX.read(data, { type: "array" })
+      const sheet = workbook.Sheets[workbook.SheetNames[0]]
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" })
+
+      if (rows.length === 0) {
+        alert("The selected file has no rows to import.")
+        return
+      }
+
+      // Expecting columns like: Product, GRN No, Unit In, Rate — for bulk GRN/purchase entry.
+      // Adjust the mapping below to match your Excel's actual column headers.
+      const parsedEntries = rows
+        .filter((r) => (r["Product"] || r["product"]) && (r["Unit In"] || r["unitIn"]))
+        .map((row) => ({
+          productName: row["Product"] || row["product"] || "",
+          grn: row["GRN No"] || row["grn"] || "",
+          quantity: parseFloat(row["Unit In"] || row["unitIn"] || 0) || 0,
+          rate: parseFloat(row["Rate"] || row["rate"] || 0) || 0,
+          date: row["Date"] || row["date"] || today(),
+        }))
+
+      if (parsedEntries.length === 0) {
+        alert("No valid rows found (need Product, GRN No, Unit In, Rate columns).")
+        return
+      }
+
+      // Send parsed rows to backend — adjust endpoint to match your actual API
+      const response = await ApiHandler.importStockEntries
+        ? await ApiHandler.importStockEntries({ entries: parsedEntries })
+        : await fetch(`https://owaisbackend.duckdns.org/api/products/bulk-import`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ entries: parsedEntries }),
+          }).then((r) => r.json())
+
+      if (response?.success) {
+        alert(`Imported ${parsedEntries.length} entries successfully.`)
+        fetchData()
+      } else {
+        alert("Import failed. Please check the file format and try again.")
+      }
+    } catch (error) {
+      alert(`Failed to import file: ${error.message}`)
+    } finally {
+      setImporting(false)
+      e.target.value = ""
+    }
   }
 
   const handlePrint = () => {
@@ -346,6 +433,14 @@ const StockLedger = () => {
 
   return (
     <div className="p-6 bg-white rounded-lg shadow space-y-6">
+      {/* Hidden file input for Excel import */}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".xlsx,.xls,.csv"
+        style={{ display: "none" }}
+        onChange={handleImportFileChange}
+      />
 
       {/* ── Header ── */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -361,9 +456,13 @@ const StockLedger = () => {
             className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 text-white text-sm rounded-md hover:bg-purple-700 disabled:opacity-40 transition-colors">
             <Printer className="h-4 w-4" /> Print
           </button>
+          <button onClick={handleImportClick} disabled={importing}
+            className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-700 disabled:opacity-40 transition-colors">
+            <Upload className="h-4 w-4" /> {importing ? "Importing..." : "Import Excel"}
+          </button>
           <button onClick={handleExport} disabled={filtered.length === 0}
             className="flex items-center gap-1.5 px-3 py-2 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 disabled:opacity-40 transition-colors">
-            <Download className="h-4 w-4" /> Export CSV
+            <Download className="h-4 w-4" /> Export Excel
           </button>
           <button onClick={fetchData} disabled={loading}
             className="flex items-center gap-1.5 px-3 py-2 bg-gray-100 text-gray-700 text-sm rounded-md hover:bg-gray-200 transition-colors">

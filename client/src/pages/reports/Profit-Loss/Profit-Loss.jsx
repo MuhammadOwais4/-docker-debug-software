@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from "react"
-import { Calendar, RefreshCw } from "lucide-react"
+import React, { useState, useEffect, useRef } from "react"
+import * as XLSX from "xlsx"
+import { Calendar, RefreshCw, Download, Upload } from "lucide-react"
 
 const API = "https://owaisbackend.duckdns.org/api"
 
@@ -9,6 +10,9 @@ function ProfitLoss() {
   const [loading,   setLoading]   = useState(false)
   const [error,     setError]     = useState(null)
   const [data,      setData]      = useState(null)
+  const [importing, setImporting] = useState(false) // NEW
+
+  const importInputRef = useRef(null) // NEW
 
   useEffect(() => {
     const today     = new Date().toISOString().split("T")[0]
@@ -27,8 +31,6 @@ function ProfitLoss() {
       setLoading(true)
       setError(null)
 
-      // ── 1. Parallel fetch ──────────────────────────────────────────────
-      // P&L API ko dono formats mein bhejo (fromDate/toDate AND startDate/endDate)
       const plUrl = `${API}/profit-loss?fromDate=${startDate}&toDate=${endDate}&startDate=${startDate}&endDate=${endDate}`
 
       const [plRes, ohvRes, prodRes, salesRes, salesReturnRes] = await Promise.all([
@@ -36,7 +38,6 @@ function ProfitLoss() {
         fetch(`${API}/overhead-vouchers`)
           .catch(() => fetch(`${API}/overhead-voucher`).catch(() => null)),
         fetch(`${API}/products`).catch(() => null),
-        // ✅ FIX: Sales directly fetch with correct params
         fetch(`${API}/sales?startDate=${startDate}&endDate=${endDate}`).catch(() => null),
         fetch(`${API}/sales/return?startDate=${startDate}&endDate=${endDate}`).catch(() => null),
       ])
@@ -45,7 +46,6 @@ function ProfitLoss() {
       const json = await plRes.json()
       if (!json.success) throw new Error(json.message || "P&L API returned error")
 
-      // ── 2. Sales — directly calculate karo with client-side date filter ─
       let salesTotal        = json.data?.revenue?.totalSales        || 0
       let saleReturnsTotal  = json.data?.revenue?.totalSaleReturns  || 0
       let saleDiscountTotal = json.data?.revenue?.totalSaleDiscounts || 0
@@ -63,13 +63,11 @@ function ProfitLoss() {
           if (filtered.length > 0) {
             const calcTotal = filtered.reduce((sum, s) =>
               sum + (s.totalAmount || (s.saleQuantity || s.quantity || 0) * (s.saleRate || s.salePrice || 0)), 0)
-            // Agar backend ne 0 diya hai aur hamare paas data hai — override karo
             if (calcTotal > salesTotal) salesTotal = calcTotal
           }
         }
       }
 
-      // Sale returns
       if (salesReturnRes && salesReturnRes.ok) {
         const retJson = await salesReturnRes.json()
         const retList = retJson?.data ?? (Array.isArray(retJson) ? retJson : [])
@@ -87,7 +85,6 @@ function ProfitLoss() {
 
       const netRevenue = salesTotal - saleReturnsTotal - saleDiscountTotal
 
-      // ── 3. Overhead (date-filtered) ────────────────────────────────────
       let ohvTotal = 0
       let ohvList  = []
       if (ohvRes && ohvRes.ok) {
@@ -103,8 +100,6 @@ function ProfitLoss() {
         ohvTotal = ohvList.reduce((s, v) => s + (v.totalAmount || 0), 0)
       }
 
-      // ── 4. Closing Stock from products ─────────────────────────────────
-      // ✅ GRN se: Total Balance Amount = 29,161,117.16 (Balance Qty x Purchase Rate)
       let closingStockCalc = json.data?.cogs?.closingStock || 0
 
       if (prodRes && prodRes.ok) {
@@ -112,7 +107,6 @@ function ProfitLoss() {
         const products = prodJson?.data ?? (Array.isArray(prodJson) ? prodJson : [])
         if (products.length > 0) {
           const calc = products.reduce((sum, p) => {
-            // ✅ FIX: balanceQty use karo — yeh GRN ke "Balance Qty" se match karta hai
             const qty  = p.balanceQty ?? p.balance_qty ?? p.balanceQuantity ?? 0
             const rate = p.purchaseRate ?? p.purchase_rate ?? p.costPrice ?? p.price ?? 0
             return sum + (Number(qty) * Number(rate))
@@ -121,7 +115,6 @@ function ProfitLoss() {
         }
       }
 
-      // ── 5. Merge corrected values ──────────────────────────────────────
       const mergedRevenue = {
         ...json.data.revenue,
         totalSales:         salesTotal,
@@ -154,6 +147,139 @@ function ProfitLoss() {
     return `From ${new Date(startDate).toLocaleDateString("en-GB")} to ${new Date(endDate).toLocaleDateString("en-GB")}`
   }
 
+  // ═══════════════════════ NEW: derive computed values (used by both UI and Excel export) ═══════════════════════
+  const getComputed = () => {
+    if (!data) return null
+    const ohvTotal      = data.ohvTotal || 0
+    const closingStock  = data.closingStockCalc ?? data.cogs?.closingStock ?? 0
+    const cogsAvailable = (data.cogs?.cogsAvailableForSale || 0) + ohvTotal
+    const cogsTotal     = cogsAvailable - closingStock
+    const netRevenue    = data.revenue?.netRevenue || 0
+    const grossProfit   = netRevenue - cogsTotal
+    const netProfit     = grossProfit
+      - (data.expenses?.totalExpenses || 0)
+      + (data.otherIncome?.totalOtherIncome || 0)
+    return { ohvTotal, closingStock, cogsAvailable, cogsTotal, netRevenue, grossProfit, netProfit }
+  }
+
+  // ═══════════════════════ NEW: REAL EXCEL EXPORT (.xlsx) ═══════════════════════
+  const handleExcelExport = () => {
+    if (!data) {
+      alert("No data to export. Load the report first.")
+      return
+    }
+    const c = getComputed()
+    const rows = []
+
+    rows.push({ Section: "REVENUE", Item: "", Amount: "" })
+    rows.push({ Section: "", Item: "Sales", Amount: data.revenue?.totalSales || 0 })
+    rows.push({ Section: "", Item: "Less: Sale Return", Amount: data.revenue?.totalSaleReturns || 0 })
+    rows.push({ Section: "", Item: "Less: Sales Discount", Amount: data.revenue?.totalSaleDiscounts || 0 })
+    rows.push({ Section: "", Item: "Total Revenues (Net)", Amount: c.netRevenue })
+    rows.push({ Section: "", Item: "", Amount: "" })
+
+    rows.push({ Section: "COST OF GOODS SOLD", Item: "", Amount: "" })
+    rows.push({ Section: "", Item: "Opening Stock", Amount: data.cogs?.openingStock || 0 })
+    rows.push({ Section: "", Item: "Add: Purchases", Amount: data.cogs?.totalPurchases || 0 })
+    ;(data.cogs?.purchaseBreakdown || []).forEach(p => {
+      rows.push({ Section: "", Item: `  ${p.name || p.code}`, Amount: p.amount || 0 })
+    })
+    rows.push({ Section: "", Item: "Less: Purchase Return", Amount: data.cogs?.totalPurchaseReturns || 0 })
+    rows.push({ Section: "", Item: "Less: Purchase Discount", Amount: data.cogs?.totalPurchaseDiscounts || 0 })
+    rows.push({ Section: "", Item: `Add: Overhead Expenses (${data.ohvList?.length || 0} vouchers)`, Amount: c.ohvTotal })
+    rows.push({ Section: "", Item: "Cost of Goods Available for Sale", Amount: c.cogsAvailable })
+    rows.push({ Section: "", Item: "Less: Closing Stock", Amount: c.closingStock })
+    rows.push({ Section: "", Item: "Cost of Goods Sold", Amount: c.cogsTotal })
+    rows.push({ Section: "", Item: "GROSS PROFIT (LOSS)", Amount: c.grossProfit })
+    rows.push({ Section: "", Item: "", Amount: "" })
+
+    rows.push({ Section: "OPERATING EXPENSES", Item: "", Amount: "" })
+    if ((data.expenses?.breakdown?.length || 0) > 0) {
+      const grouped = {}
+      data.expenses.breakdown.forEach(e => {
+        const key = e.code || e.name
+        if (!grouped[key]) grouped[key] = { ...e }
+        else grouped[key].amount += e.amount
+      })
+      Object.values(grouped).forEach(exp => {
+        rows.push({ Section: "", Item: exp.name || exp.code, Amount: exp.amount })
+      })
+    }
+    rows.push({ Section: "", Item: "Total Expenses", Amount: data.expenses?.totalExpenses || 0 })
+    rows.push({ Section: "", Item: "", Amount: "" })
+
+    rows.push({ Section: "INCOME FROM OTHER SOURCES", Item: "", Amount: "" })
+    if ((data.otherIncome?.breakdown?.length || 0) > 0) {
+      data.otherIncome.breakdown.forEach(inc => {
+        rows.push({ Section: "", Item: inc.name || inc.code, Amount: inc.amount })
+      })
+    }
+    rows.push({ Section: "", Item: "Total Other Income", Amount: data.otherIncome?.totalOtherIncome || 0 })
+    rows.push({ Section: "", Item: "", Amount: "" })
+
+    rows.push({ Section: "", Item: "NET PROFIT / LOSS", Amount: c.netProfit })
+
+    const worksheet = XLSX.utils.json_to_sheet(rows)
+    worksheet["!cols"] = [{ wch: 22 }, { wch: 42 }, { wch: 18 }]
+
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Income Statement")
+    XLSX.writeFile(workbook, `income_statement_${startDate}_${endDate}.xlsx`)
+  }
+
+  // ═══════════════════════ NEW: EXCEL IMPORT ═══════════════════════
+  const handleImportClick = () => {
+    importInputRef.current?.click()
+  }
+
+  const handleImportFileChange = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    try {
+      setImporting(true)
+      const buf = await file.arrayBuffer()
+      const workbook = XLSX.read(buf, { type: "array" })
+      const sheet = workbook.Sheets[workbook.SheetNames[0]]
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" })
+
+      if (rows.length === 0) {
+        alert("The selected file has no rows to import.")
+        return
+      }
+
+      // Expecting columns like: Item, Amount, Section (e.g. manual adjustment/other income/expense rows)
+      // Adjust the mapping below to match your Excel's actual column headers.
+      const parsedRows = rows
+        .filter(r => (r["Item"] || r["item"]) && (r["Amount"] !== "" ))
+        .map((row) => ({
+          section: row["Section"] || row["section"] || "",
+          item: row["Item"] || row["item"] || "",
+          amount: parseFloat(row["Amount"] || row["amount"] || 0) || 0,
+        }))
+
+      // Send parsed rows to backend — adjust endpoint to match your actual API
+      const response = await fetch(`${API}/profit-loss/import-adjustments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ startDate, endDate, rows: parsedRows }),
+      })
+      const result = await response.json()
+
+      if (result.success) {
+        alert(`Imported ${parsedRows.length} rows successfully.`)
+        fetchPL()
+      } else {
+        alert("Import failed. Please check the file format and try again.")
+      }
+    } catch (error) {
+      alert(`Failed to import file: ${error.message}`)
+    } finally {
+      setImporting(false)
+      e.target.value = ""
+    }
+  }
+
   const sectionHeader = {
     backgroundColor: "#3f64a8", color: "white", fontWeight: "bold",
     padding: "10px 15px", fontSize: "16px", marginTop: "30px",
@@ -182,6 +308,14 @@ function ProfitLoss() {
 
   return (
     <div style={{ maxWidth: "1000px", margin: "0 auto", padding: "20px", fontFamily: "system-ui, -apple-system, sans-serif" }}>
+      {/* Hidden file input for Excel import */}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".xlsx,.xls,.csv"
+        style={{ display: "none" }}
+        onChange={handleImportFileChange}
+      />
 
       {/* Controls */}
       <div style={{ marginBottom: "30px", padding: "20px", backgroundColor: "#f8f9fa", borderRadius: "8px", boxShadow: "0 2px 4px rgba(0,0,0,0.1)" }}>
@@ -199,6 +333,16 @@ function ProfitLoss() {
             style={{ padding: "10px 20px", backgroundColor: "#0d6efd", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "500", fontSize: "14px", display: "flex", alignItems: "center", gap: "8px", height: "42px" }}>
             <RefreshCw style={{ width: "16px", height: "16px" }} />
             Load Data
+          </button>
+          <button onClick={handleImportClick} disabled={importing}
+            style={{ padding: "10px 20px", backgroundColor: importing ? "#6c757d" : "#6f42c1", color: "white", border: "none", borderRadius: "6px", cursor: importing ? "not-allowed" : "pointer", fontWeight: "500", fontSize: "14px", display: "flex", alignItems: "center", gap: "8px", height: "42px" }}>
+            <Upload style={{ width: "16px", height: "16px" }} />
+            {importing ? "Importing..." : "Import Excel"}
+          </button>
+          <button onClick={handleExcelExport} disabled={!data}
+            style={{ padding: "10px 20px", backgroundColor: !data ? "#adb5bd" : "#fd7e14", color: "white", border: "none", borderRadius: "6px", cursor: !data ? "not-allowed" : "pointer", fontWeight: "500", fontSize: "14px", display: "flex", alignItems: "center", gap: "8px", height: "42px" }}>
+            <Download style={{ width: "16px", height: "16px" }} />
+            Export Excel
           </button>
         </div>
       </div>
@@ -221,16 +365,8 @@ function ProfitLoss() {
           Select dates and click Load Data
         </div>
       ) : (() => {
-
-        const ohvTotal     = data.ohvTotal || 0
-        const closingStock = data.closingStockCalc ?? data.cogs?.closingStock ?? 0
-        const cogsAvailable = (data.cogs?.cogsAvailableForSale || 0) + ohvTotal
-        const cogsTotal     = cogsAvailable - closingStock
-        const netRevenue    = data.revenue?.netRevenue || 0
-        const grossProfit   = netRevenue - cogsTotal
-        const netProfit     = grossProfit
-          - (data.expenses?.totalExpenses || 0)
-          + (data.otherIncome?.totalOtherIncome || 0)
+        const c = getComputed()
+        const { ohvTotal, closingStock, cogsAvailable, cogsTotal, netRevenue, grossProfit, netProfit } = c
 
         return (
           <>
