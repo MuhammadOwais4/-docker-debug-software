@@ -1,3 +1,0 @@
-owaisbackend.duckdns.org {
-    reverse_proxy localhost:5000
-}
