@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
-const API_BASE_URL = "https://owaisbackend.duckdns.org/api"
+const API_BASE_URL = "https://owaisbackend381.duckdns.org/api"
 const format = (n) => {
   const num = Number.parseFloat(n) || 0
   return num === 0 ? "0" : num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })

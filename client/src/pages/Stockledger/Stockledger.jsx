@@ -351,7 +351,7 @@ const StockLedger = () => {
       // Send parsed rows to backend — adjust endpoint to match your actual API
       const response = await ApiHandler.importStockEntries
         ? await ApiHandler.importStockEntries({ entries: parsedEntries })
-        : await fetch(`https://owaisbackend.duckdns.org/api/products/bulk-import`, {
+        : await fetch(`https://owaisbackend381.duckdns.org/api/products/bulk-import`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ entries: parsedEntries }),

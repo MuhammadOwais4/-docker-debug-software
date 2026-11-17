@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Package, AlertCircle, Calendar, Filter, X, ChevronDown, Loader, RefreshCw, AlertTriangle, Receipt } from 'lucide-react';
 
-const API_BASE_URL = 'https://owaisbackend.duckdns.org/api';
+const API_BASE_URL = 'https://owaisbackend381.duckdns.org/api';
 
 const apiClient = {
   get: async (url) => {

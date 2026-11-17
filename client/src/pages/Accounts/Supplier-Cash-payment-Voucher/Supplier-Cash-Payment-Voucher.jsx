@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 
-const BASE_URL = "https://owaisbackend.duckdns.org";
+const BASE_URL = "https://owaisbackend381.duckdns.org";
 const getToken = () => localStorage.getItem("token") || sessionStorage.getItem("token") || "";
 
 const http = {

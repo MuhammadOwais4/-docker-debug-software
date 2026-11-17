@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 
 // ── API ───────────────────────────────────────────────────────────────────────
-const BASE_URL = "https://owaisbackend.duckdns.org";
+const BASE_URL = "https://owaisbackend381.duckdns.org";
 const getToken = () => localStorage.getItem("token") || sessionStorage.getItem("token") || "";
 const http = {
   get: async (path) => {

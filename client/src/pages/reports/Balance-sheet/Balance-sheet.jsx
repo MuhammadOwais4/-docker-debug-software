@@ -62,7 +62,7 @@ function BalanceSheet() {
       setLoadingVendors(true);
       console.log("📋 Loading vendors from liabilities...");
       
-      const response = await fetch(`https://owaisbackend.duckdns.org/api/chart-of-accounts/liabilities`);
+      const response = await fetch(`https://owaisbackend381.duckdns.org/api/chart-of-accounts/liabilities`);
       const data = await response.json();
       
       if (!data.success) {
@@ -85,7 +85,7 @@ function BalanceSheet() {
   const loadClosingStock = async () => {
     try {
       console.log("📦 Fetching Closing Stock from /products/get-stock...");
-      const response = await fetch(`https://owaisbackend.duckdns.org/api/products/get-stock`);
+      const response = await fetch(`https://owaisbackend381.duckdns.org/api/products/get-stock`);
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const data = await response.json();
       if (!data.success) { setClosingStock(0); return 0; }
@@ -105,7 +105,7 @@ function BalanceSheet() {
     try {
       console.log("📊 Fetching Net Profit/Loss from P&L API...");
       const response = await fetch(
-        `https://owaisbackend.duckdns.org/api/profit-loss?fromDate=${startDate}&toDate=${endDate}`
+        `https://owaisbackend381.duckdns.org/api/profit-loss?fromDate=${startDate}&toDate=${endDate}`
       );
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const data = await response.json();
@@ -145,7 +145,7 @@ function BalanceSheet() {
           toDate: endDate,
         });
         const response = await fetch(
-          `https://owaisbackend.duckdns.org/api/ledgers/account-ledger?${params}`
+          `https://owaisbackend381.duckdns.org/api/ledgers/account-ledger?${params}`
         );
         const data = await response.json();
         let balance = 0;
@@ -177,7 +177,7 @@ function BalanceSheet() {
         loadTaxAccountBalances(),
       ]);
 
-      const accountsResponse = await fetch(`https://owaisbackend.duckdns.org/api/ledgers/accounts`);
+      const accountsResponse = await fetch(`https://owaisbackend381.duckdns.org/api/ledgers/accounts`);
       const accountsData = await accountsResponse.json();
       
       if (!accountsData.success) throw new Error("Failed to fetch accounts");
@@ -201,7 +201,7 @@ function BalanceSheet() {
           });
 
           const ledgerResponse = await fetch(
-            `https://owaisbackend.duckdns.org/api/ledgers/account-ledger?${params}`
+            `https://owaisbackend381.duckdns.org/api/ledgers/account-ledger?${params}`
           );
           const ledgerData = await ledgerResponse.json();
 
@@ -485,7 +485,7 @@ function BalanceSheet() {
         }));
 
       // Send parsed rows to backend — adjust endpoint to match your actual API
-      const response = await fetch(`https://owaisbackend.duckdns.org/api/ledgers/import-accounts`, {
+      const response = await fetch(`https://owaisbackend381.duckdns.org/api/ledgers/import-accounts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accounts: parsedAccounts }),

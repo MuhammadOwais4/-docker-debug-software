@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react"
 import * as XLSX from "xlsx"
 import { Calendar, RefreshCw, Download, Upload } from "lucide-react"
 
-const API = "https://owaisbackend.duckdns.org/api"
+const API = "https://owaisbackend381.duckdns.org/api"
 
 function ProfitLoss() {
   const [startDate, setStartDate] = useState("")
