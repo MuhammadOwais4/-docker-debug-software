@@ -3,7 +3,7 @@ import axios from "axios"
 // VPS deployment: nginx proxies /api/* to the backend container, so a relative
 // path works both in the Docker build and behind your domain.
 // Set VITE_API_BASE_URL in a .env file if you ever need to point elsewhere.
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://owaisbackend381.duckdns.org/api"
+const API_BASE_URL =  "https://owaisbackend381.duckdns.org/api"
 
 // Create axios instance with default config
 const apiClient = axios.create({
